@@ -188,11 +188,9 @@ pub async fn region_stations(
     State(st): State<Arc<AppState>>,
     Query(p):  Query<RegionParams>,
 ) -> Json<AircraftResponse> {
-    let s2 = zoom_to_s2_level(p.zoom.unwrap_or(8));
-
     let raw = st.raw_stations.read().await;
 
-    // If raw data isn't loaded yet, fall back to trie-based region query
+    // Fall back to trie-based response before the raw cache is populated.
     if raw.is_empty() {
         let tokens = viewport_tokens(p.s, p.w, p.n, p.e, st.config.s2_level);
         let entries = match st.store.query_region(&tokens).await {
@@ -202,18 +200,23 @@ pub async fn region_stations(
         return Json(AircraftResponse { count: entries.len(), aircraft: entries });
     }
 
-    // Filter raw stations to viewport
-    let in_view: Vec<&crate::metar_bulk::BulkMETAR> = raw.iter()
+    // Collect stations within the viewport bounds.
+    let in_view: Vec<crate::metar_bulk::BulkMETAR> = raw.iter()
         .filter(|s| s.lat >= p.s && s.lat <= p.n && s.lon >= p.w && s.lon <= p.e)
+        .cloned()
         .collect();
 
-    let entries: Vec<GeoEntry> = if s2 == RAW_LEVEL {
-        // Zoom 10+: individual stations
+    let max = st.config.max_clusters;
+
+    let entries: Vec<GeoEntry> = if in_view.len() <= max {
+        // Fewer stations than the cap — show every individual station.
         in_view.iter().map(|s| station_to_aircraft(raw_to_geo_entry(s))).collect()
     } else {
-        // Aggregate to the zoom-appropriate level
-        let owned: Vec<crate::metar_bulk::BulkMETAR> = in_view.into_iter().cloned().collect();
-        let clusters = crate::aggregate::aggregate(&owned, usize::MAX, Some(s2));
+        // More stations than the cap — auto-cluster to ≤ max nodes.
+        // aggregate() will pick the finest S2 level whose occupied-cell count
+        // is ≤ max, giving the maximum granularity that still keeps the UI
+        // readable regardless of the zoom level or viewport size.
+        let clusters = crate::aggregate::aggregate(&in_view, max, None);
         clusters.iter().map(|c| station_to_aircraft(cluster_to_geo_entry(c))).collect()
     };
 
