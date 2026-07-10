@@ -1,5 +1,12 @@
 [workspace]
-members  = ["lib", "demo/server", "demo/weather-server", "demo/loadtest", "demo/geo-node"]
+members  = [
+    "lib",
+    "demo/server",
+    "demo/weather-server",
+    "demo/loadtest",
+    "demo/geo-node",
+    "tests/cluster_integration",
+]
 resolver = "2"
 
 [workspace.dependencies]
