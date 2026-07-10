@@ -4,7 +4,7 @@ use serde_json::json;
 // ── helpers ────────────────────────────────────────────────────────────────
 
 fn entry(id: &str, lat: f64, lon: f64) -> GeoEntry {
-    GeoEntry { id: id.into(), lat, lon, payload: json!({ "test": true }) }
+    GeoEntry { id: id.into(), lat, lon, payload: json!({ "test": true }), written_at: 0 }
 }
 
 // ── basic correctness ──────────────────────────────────────────────────────
@@ -156,6 +156,7 @@ fn payload_preserved_on_query() {
         lat:     41.97,
         lon:    -87.91,
         payload: json!({ "callsign": "UAL123", "altitude": 10600, "on_ground": false }),
+        written_at: 0,
     });
     let tok = trie.cell_token(41.97, -87.91);
     let r   = trie.query_token(&tok);

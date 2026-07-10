@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
                                 "count":        c.count,
                                 "__is_weather": true,
                             }),
+                            written_at: 0,
                         };
 
                         {

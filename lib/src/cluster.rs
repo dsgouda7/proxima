@@ -30,6 +30,9 @@ pub enum NodeStatus {
     Suspect,
     Dead,
     Standby,
+    /// Node has loaded its snapshot and is performing delta-sync catch-up.
+    /// It accepts no new writes until it transitions to Active.
+    Bootstrapping,
 }
 
 impl NodeInfo {

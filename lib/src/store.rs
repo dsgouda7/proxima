@@ -94,8 +94,17 @@ impl RedisStore {
     ///    it never fires for active entities.
     pub async fn persist_trie(&self, trie: &GeoTrie) -> Result<()> {
         let start   = Instant::now();
-        let entries = trie.all_entries();
+        let mut entries = trie.all_entries();
         if entries.is_empty() { return Ok(()); }
+
+        // Stamp written_at on entries that haven't been timestamped yet.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        for e in &mut entries {
+            if e.written_at == 0 { e.written_at = now_ms; }
+        }
 
         let prefix = &self.key_prefix;
         let ttl    = self.entity_ttl_secs;
@@ -103,9 +112,10 @@ impl RedisStore {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
 
         // ── Step 1: Prepare active-cells key (diff computed server-side in Lua) ──
-        let active_key = format!("{prefix}:active_cells");
+        let active_key    = format!("{prefix}:active_cells");
+        let written_at_key = format!("{prefix}:written_at");
 
-        // ── Step 2: Write entities + location reverse-lookup ──────────────
+        // ── Step 2: Write entities + location reverse-lookup + written_at index ──
         let mut new_cells: HashSet<String> = HashSet::with_capacity(entries.len() / 4);
 
         for chunk in entries.chunks(CHUNK_SIZE) {
@@ -122,6 +132,9 @@ impl RedisStore {
                 pipe.sadd(&ck,        &entry.id).ignore();
                 // Reverse lookup: id → current cell token
                 pipe.set_ex(&loc_key, &token, ttl).ignore();
+                // Written-at sorted set: score = ms timestamp, member = entity id.
+                // Enables efficient delta-sync queries: ZRANGEBYSCORE since_ms +inf
+                pipe.zadd(&written_at_key, entry.written_at as f64, entry.id.as_str()).ignore();
                 new_cells.insert(token);
             }
             pipe.query_async::<()>(&mut conn).await?;
@@ -188,4 +201,62 @@ impl RedisStore {
     }
 
     pub fn metrics(&self) -> &Arc<Metrics> { &self.metrics }
+
+    /// Returns all entities whose `written_at` timestamp is strictly greater
+    /// than `since_ms` AND whose S2 cell token falls in `[prefix_start, prefix_end)`.
+    ///
+    /// Used by a newly bootstrapped shard to catch up on writes that occurred
+    /// on the source shard AFTER the snapshot was captured.  The caller should
+    /// apply the returned entries with a freshness check:
+    ///   `apply if incoming.written_at > existing.written_at`
+    pub async fn entities_written_after(
+        &self,
+        since_ms:     u64,
+        prefix_start: &str,
+        prefix_end:   &str,
+    ) -> Result<Vec<GeoEntry>> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let prefix   = &self.key_prefix;
+
+        // Query the sorted set for all entity IDs written after since_ms.
+        let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(format!("{prefix}:written_at"))
+            .arg(since_ms + 1)   // exclusive lower bound
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await?;
+
+        if ids.is_empty() { return Ok(vec![]); }
+
+        // Filter to the prefix range by looking up each entity's cell token.
+        let mut in_range_ids: Vec<String> = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let token: Option<String> = conn
+                .get(format!("{prefix}:location:{id}"))
+                .await
+                .unwrap_or(None);
+            if let Some(tok) = token {
+                let ge = prefix_start.is_empty() || tok.as_str() >= prefix_start;
+                let lt = prefix_end.is_empty()   || tok.as_str() <  prefix_end;
+                if ge && lt { in_range_ids.push(id.clone()); }
+            }
+        }
+
+        if in_range_ids.is_empty() { return Ok(vec![]); }
+
+        // Batch-fetch entity JSON for the matching IDs.
+        let mut pipe = redis::pipe();
+        for id in &in_range_ids {
+            pipe.get(format!("{prefix}:entity:{id}"));
+        }
+        let jsons: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+
+        let entries = jsons
+            .into_iter()
+            .flatten()
+            .filter_map(|j| serde_json::from_str::<GeoEntry>(&j).ok())
+            .collect();
+
+        Ok(entries)
+    }
 }

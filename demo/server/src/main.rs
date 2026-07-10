@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
                                     "origin_country": a.origin_country,
                                     // history is intentionally omitted — fetch from SQLite on-demand
                                 }),
+                                written_at: 0,
                             });
                         }
                     }

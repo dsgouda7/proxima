@@ -18,6 +18,7 @@ use georedis::{
     cluster::{ClusterRing, NodeInfo, NodeStatus},
     GeoEntry,
 };
+use georedis::{Metrics, RedisStore};
 use rand::seq::SliceRandom;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -112,6 +113,9 @@ struct AppState {
     http:     reqwest::Client,
     /// None when SNAPSHOT_PATH is empty (snapshotting disabled)
     snapshot: Option<Arc<snapshot::Snapshot>>,
+    /// RedisStore wrapping the same Redis connection.
+    /// Used for the lib-level `entities_written_after` delta-sync query.
+    store:    Arc<RedisStore>,
 }
 
 impl AppState {
@@ -140,15 +144,23 @@ impl AppState {
         };
         let mut ring = ClusterRing::default();
         ring.merge(my.clone());
+        let store = Arc::new(
+            RedisStore::with_config(
+                cfg.redis_url.as_str(),
+                Metrics::new(),
+                cfg.entity_ttl_secs,
+            ).expect("RedisStore init"),
+        );
         Ok(Self {
             cfg,
             ring:    Arc::new(RwLock::new(ring)),
             my_info: Arc::new(RwLock::new(my)),
-            redis,
+            redis:   redis.clone(),
             http:    reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .build().unwrap(),
             snapshot: snap,
+            store,
         })
     }
 }
@@ -229,6 +241,7 @@ async fn main() -> Result<()> {
         .route("/metrics",       get(route_metrics))
         .route("/metrics/prom",  get(route_metrics_prometheus))
         .route("/trace",         get(route_trace))
+        .route("/delta-sync",    get(route_delta_sync))   // read-only, no auth
         .route("/entity/:id",    delete(route_delete_entity))
         .merge(write_routes)
         .layer(CorsLayer::permissive())
@@ -568,11 +581,20 @@ async fn route_trigger_split(
     }
 
     // Tell the target its new range: [split_point, old_end)
+    // Include this node's address and the snapshot timestamp so the target
+    // can perform a delta-sync catch-up independently.
+    let snapshot_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
     s.http
         .put(format!("http://{}/assign-range", req.target))
         .json(&AssignRangeRequest {
-            prefix_start: split_point.clone(),
-            prefix_end:   old_end.clone(),
+            prefix_start:       split_point.clone(),
+            prefix_end:         old_end.clone(),
+            source_addr:        Some(s.cfg.http_addr.clone()),
+            snapshot_timestamp: Some(snapshot_ts),
         })
         .send().await.map_err(|e| err(e.into()))?;
 
@@ -747,44 +769,79 @@ async fn route_ingest_batch(
     Json(entries): Json<Vec<GeoEntry>>,
 ) -> StatusCode {
     use redis::AsyncCommands;
+
+    // A Bootstrapping node is catching up from snapshot and must not accept
+    // new writes until it has transitioned to Active.
+    {
+        let my = s.my_info.read().await;
+        if my.status == NodeStatus::Bootstrapping {
+            tracing::warn!("Rejected ingest — node is still Bootstrapping");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    }
+
     let Ok(mut conn) = s.redis.get_multiplexed_async_connection().await else {
         return StatusCode::SERVICE_UNAVAILABLE;
     };
 
-    let ttl    = s.cfg.entity_ttl_secs as u64;
-    let prefix = "georedis";
+    let ttl          = s.cfg.entity_ttl_secs as u64;
+    let prefix       = "georedis";
+    let now_ms       = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let written_at_key = format!("{prefix}:written_at");
 
-    for entry in &entries {
+    // Snapshot this node's range once (avoid repeated lock acquisitions).
+    let (pfx_start, pfx_end) = {
+        let my = s.my_info.read().await;
+        (my.prefix_start.clone(), my.prefix_end.clone())
+    };
+
+    for mut entry in entries.into_iter() {
         let new_token = cell_token(entry.lat, entry.lon, s.cfg.s2_level);
-        let ak        = format!("{prefix}:entity:{}", entry.id);
-        let new_ck    = format!("{prefix}:cell:{new_token}");
-        let loc_key   = format!("{prefix}:location:{}", entry.id);
-        let json      = serde_json::to_string(entry).unwrap_or_default();
+
+        // ── Range ownership guard ──────────────────────────────────────────
+        // Once the source shard has transferred a range and updated its prefix,
+        // it refuses writes that belong to a different shard.  Return 409 so
+        // clients can look up the correct node from the cluster ring.
+        let in_range = (pfx_start.is_empty() || new_token.as_str() >= pfx_start.as_str())
+                    && (pfx_end.is_empty()   || new_token.as_str() <  pfx_end.as_str());
+        if !in_range {
+            tracing::warn!(
+                "Rejecting entity {} (token {}) — not in my range [{}, {})",
+                entry.id, new_token, pfx_start, pfx_end
+            );
+            return StatusCode::CONFLICT;   // 409: caller should re-route
+        }
+
+        // ── Stamp written_at ───────────────────────────────────────────────
+        if entry.written_at == 0 { entry.written_at = now_ms; }
+
+        let ak      = format!("{prefix}:entity:{}", entry.id);
+        let new_ck  = format!("{prefix}:cell:{new_token}");
+        let loc_key = format!("{prefix}:location:{}", entry.id);
+        let json    = serde_json::to_string(&entry).unwrap_or_default();
 
         // ── Reverse-lookup cleanup ─────────────────────────────────────────
-        // If the entity was previously in a different cell, remove it there
-        // immediately. This maintains strict single-location invariant.
         if let Ok(Some(old_token)) = conn.get::<_, Option<String>>(&loc_key).await {
             if old_token != new_token {
                 let old_ck = format!("{prefix}:cell:{old_token}");
                 let _: () = conn.srem(&old_ck, &entry.id).await.unwrap_or(());
-                // Clean up empty cell keys to keep the index compact
                 let remaining: u64 = conn.scard(&old_ck).await.unwrap_or(1);
                 if remaining == 0 {
                     let _: () = conn.del(&old_ck).await.unwrap_or(());
                 }
-                tracing::debug!(
-                    "Entity {} moved: cell {old_token} → {new_token}",
-                    entry.id
-                );
+                tracing::debug!("Entity {} moved: cell {old_token} → {new_token}", entry.id);
             }
         }
 
-        // ── Write new state atomically ─────────────────────────────────────
+        // ── Write entity + written_at index atomically ─────────────────────
         let mut pipe = redis::pipe();
-        pipe.set_ex(&ak,      &json,      ttl).ignore()  // entity data
-            .sadd(&new_ck,    &entry.id).ignore()         // cell membership
-            .set_ex(&loc_key, &new_token, ttl).ignore();  // reverse lookup
+        pipe.set_ex(&ak,             &json,              ttl).ignore()
+            .sadd(&new_ck,           &entry.id).ignore()
+            .set_ex(&loc_key,        &new_token,         ttl).ignore()
+            .zadd(&written_at_key,   entry.written_at as f64, entry.id.as_str()).ignore();
         let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
     }
 
@@ -860,26 +917,156 @@ async fn route_ingest_snapshot(
     StatusCode::OK
 }
 
+// ── Delta sync (for bootstrapping shards) ─────────────────────────────────
+
+#[derive(Deserialize)]
+struct DeltaSyncParams {
+    since_ms: u64,
+}
+
+/// GET /delta-sync?since_ms=T
+///
+/// Returns all entities in this node's prefix range that were written
+/// (or updated) after timestamp T (Unix milliseconds).
+///
+/// Called by a newly bootstrapped shard to catch up on writes that
+/// happened AFTER its snapshot was captured, before it goes Active.
+async fn route_delta_sync(
+    State(s): State<AppState>,
+    Query(p): Query<DeltaSyncParams>,
+) -> Json<Vec<GeoEntry>> {
+    let (prefix_start, prefix_end) = {
+        let my = s.my_info.read().await;
+        (my.prefix_start.clone(), my.prefix_end.clone())
+    };
+    match s.store.entities_written_after(p.since_ms, &prefix_start, &prefix_end).await {
+        Ok(entries) => {
+            tracing::info!(
+                "delta-sync: {} entities written after {}ms in [{}, {})",
+                entries.len(), p.since_ms, prefix_start, prefix_end
+            );
+            Json(entries)
+        }
+        Err(e) => {
+            tracing::error!("delta-sync query failed: {e}");
+            Json(vec![])
+        }
+    }
+}
+
 // ── Assign range (from a splitting node) ─────────────────────────────────
 
 #[derive(Deserialize, Serialize)]
 struct AssignRangeRequest {
-    prefix_start: String,
-    prefix_end:   String,
+    prefix_start:       String,
+    prefix_end:         String,
+    /// HTTP address of the source shard — used for delta-sync catch-up.
+    source_addr:        Option<String>,
+    /// Unix ms timestamp of the snapshot seed. Bounds the delta-sync query.
+    snapshot_timestamp: Option<u64>,
 }
 
+/// PUT /assign-range — called by the splitting shard to hand off a token range.
+///
+/// Transitions to `Bootstrapping` and spawns a background task that:
+///   1. Requests entities written after `snapshot_timestamp` from the source shard
+///   2. Applies each with a freshness check (`written_at` comparison)
+///   3. Transitions to `Active` and gossips the new status
 async fn route_assign_range(
     State(s):  State<AppState>,
     Json(req): Json<AssignRangeRequest>,
 ) -> StatusCode {
-    let mut my = s.my_info.write().await;
-    info!("Assigned range [{}, {})", req.prefix_start, req.prefix_end);
-    my.prefix_start = req.prefix_start;
-    my.prefix_end   = req.prefix_end;
-    my.status       = NodeStatus::Active;
-    my.generation  += 1;
-    s.ring.write().await.merge(my.clone());
+    info!(
+        "Assigned range [{}, {}); bootstrapping from {}",
+        req.prefix_start, req.prefix_end,
+        req.source_addr.as_deref().unwrap_or("unknown")
+    );
+    {
+        let mut my = s.my_info.write().await;
+        my.prefix_start = req.prefix_start.clone();
+        my.prefix_end   = req.prefix_end.clone();
+        my.status       = NodeStatus::Bootstrapping;   // not yet ready for writes
+        my.generation  += 1;
+        s.ring.write().await.merge(my.clone());
+    }
+
+    let (bs_state, src, ps, pe, ts) = (
+        s.clone(),
+        req.source_addr.clone(),
+        req.prefix_start.clone(),
+        req.prefix_end.clone(),
+        req.snapshot_timestamp.unwrap_or(0),
+    );
+    tokio::spawn(async move {
+        bootstrap_delta_sync(bs_state, src, ps, pe, ts).await;
+    });
     StatusCode::OK
+}
+
+/// Background task: delta-sync catch-up then go Active.
+async fn bootstrap_delta_sync(
+    s:            AppState,
+    source_addr:  Option<String>,
+    prefix_start: String,
+    prefix_end:   String,
+    since_ms:     u64,
+) {
+    tokio::time::sleep(Duration::from_secs(3)).await; // let /ingest-snapshot settle
+
+    if let Some(src) = source_addr {
+        let url = format!("http://{src}/delta-sync?since_ms={since_ms}");
+        tracing::info!("Bootstrap: requesting delta sync from {src} (since {since_ms} ms)");
+
+        match s.http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(mut delta) = resp.json::<Vec<GeoEntry>>().await {
+                    tracing::info!("Bootstrap: received {} delta entries", delta.len());
+
+                    if let Ok(mut conn) = s.redis.get_multiplexed_async_connection().await {
+                        use redis::AsyncCommands;
+                        let ttl    = s.cfg.entity_ttl_secs as u64;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default().as_millis() as u64;
+                        let wk = "georedis:written_at";
+
+                        for entry in &mut delta {
+                            if entry.written_at == 0 { entry.written_at = now_ms; }
+
+                            // Freshness check — only apply if incoming is newer.
+                            let existing: Option<String> = conn
+                                .get(format!("georedis:entity:{}", entry.id))
+                                .await.unwrap_or(None);
+                            let apply = match existing {
+                                None    => true,
+                                Some(j) => serde_json::from_str::<GeoEntry>(&j)
+                                    .map(|ex| entry.written_at > ex.written_at)
+                                    .unwrap_or(true),
+                            };
+                            if !apply { continue; }
+
+                            let tok  = cell_token(entry.lat, entry.lon, s.cfg.s2_level);
+                            let json = serde_json::to_string(entry).unwrap_or_default();
+                            let mut pipe = redis::pipe();
+                            pipe.set_ex(format!("georedis:entity:{}",   entry.id), &json, ttl).ignore()
+                                .sadd(format!("georedis:cell:{tok}"),  &entry.id).ignore()
+                                .set_ex(format!("georedis:location:{}", entry.id), &tok, ttl).ignore()
+                                .zadd(wk, entry.written_at as f64, entry.id.as_str()).ignore();
+                            let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
+                        }
+                    }
+                }
+            }
+            Ok(r) => tracing::warn!("Bootstrap: delta sync returned {}", r.status()),
+            Err(e) => tracing::warn!("Bootstrap: delta sync failed: {e}"),
+        }
+    }
+
+    let mut my = s.my_info.write().await;
+    my.status     = NodeStatus::Active;
+    my.generation += 1;
+    s.ring.write().await.merge(my.clone());
+    info!("Bootstrap complete — node [{}, {}) is Active", prefix_start, prefix_end);
 }
 
 // ── Cross-shard entity cleanup ─────────────────────────────────────────────

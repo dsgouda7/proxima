@@ -313,6 +313,7 @@ async fn sharded_writer_task(
                 lat, lon,
                 payload: json!({ "callsign": format!("SW{id}{i:04}"),
                                  "altitude": rng.gen_range(0.0_f64..12_000.0) }),
+                written_at: 0,
             };
             let token = trie.cell_token(lat, lon);
             // Find the shard that owns this token
@@ -427,6 +428,7 @@ async fn writer_task(
                     "velocity": rng.gen_range(0.0_f64..950.0),
                     "heading":  rng.gen_range(0.0_f64..360.0),
                 }),
+                written_at: 0,
             });
         }
 

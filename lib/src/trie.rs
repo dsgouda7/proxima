@@ -9,6 +9,11 @@ pub struct GeoEntry {
     pub lat:     f64,
     pub lon:     f64,
     pub payload: serde_json::Value,
+    /// Unix milliseconds when this entry was last written to a shard.
+    /// Set to `SystemTime::now()` by `RedisStore::persist_trie()` when 0.
+    /// Used for freshness-ordered delta sync after a geographic split.
+    #[serde(default)]
+    pub written_at: u64,
 }
 
 #[derive(Default)]
@@ -89,6 +94,28 @@ impl GeoTrie {
     pub fn remove_entry(&mut self, lat: f64, lon: f64, id: &str) -> bool {
         let token = self.cell_token(lat, lon);
         self.remove_at_token(&token, id)
+    }
+
+    /// Remove and return all entries whose S2 cell token falls in
+    /// `[prefix_start, prefix_end)`.  Empty string means "unbounded".
+    ///
+    /// Called on the **source shard** immediately after a split so it stops
+    /// holding data it is no longer responsible for.  Returns the removed
+    /// entries so the caller can confirm the count or log them.
+    pub fn remove_range(&mut self, prefix_start: &str, prefix_end: &str) -> Vec<GeoEntry> {
+        let in_range: Vec<GeoEntry> = self.all_entries()
+            .into_iter()
+            .filter(|e| {
+                let token = self.cell_token(e.lat, e.lon);
+                let ge = prefix_start.is_empty() || token.as_str() >= prefix_start;
+                let lt = prefix_end.is_empty()   || token.as_str() <  prefix_end;
+                ge && lt
+            })
+            .collect();
+        for e in &in_range {
+            self.remove_entry(e.lat, e.lon, &e.id);
+        }
+        in_range
     }
 
     /// Count the total number of internal nodes in the trie (entries + branch nodes).

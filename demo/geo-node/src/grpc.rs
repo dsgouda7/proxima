@@ -91,6 +91,7 @@ impl GeoRedisGrpc for GeoRedisService {
         let geo = GeoEntry {
             id: e.id.clone(), lat: e.lat, lon: e.lon,
             payload: serde_json::from_str(&e.payload_json).unwrap_or_default(),
+            written_at: 0,
         };
         let mut conn = self.state.redis.get_multiplexed_async_connection().await
             .map_err(|e| Status::internal(e.to_string()))?;

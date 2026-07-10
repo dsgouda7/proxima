@@ -55,6 +55,7 @@ fn cluster_to_geo_entry(c: &crate::aggregate::Cluster) -> GeoEntry {
         id:  c.id.clone(),
         lat: c.lat,
         lon: c.lon,
+        written_at: 0,
         payload: serde_json::json!({
             "name":         c.id,
             "temp_c":       c.temp_c,
@@ -80,6 +81,7 @@ fn raw_to_geo_entry(s: &crate::metar_bulk::BulkMETAR) -> GeoEntry {
         id:  s.icao_id.clone(),
         lat: s.lat,
         lon: s.lon,
+        written_at: 0,
         payload: serde_json::json!({
             "name":         s.icao_id,
             "temp_c":       s.temp_c,
