@@ -56,10 +56,10 @@ $p1 = Start-Process -FilePath ".\target\release\georedis-adsb.exe" `
     -RedirectStandardError  ".\target\adsb-stderr.log" `
     -PassThru -NoNewWindow
 
-# ── AIS server — port 3002 ────────────────────────────────────────────────
+# ── AIS server — port 3002, Redis DB 2 ──────────────────────────────────────
 Write-Host "Starting AIS demo server      →  :3002" -ForegroundColor Yellow
 $env:SERVER_PORT = "3002"; $env:SQLITE_PATH = "georedis-ais.db"
-$env:REDIS_URL   = if ($env:REDIS_URL -ne "redis://127.0.0.1:6379/1") { $env:REDIS_URL } else { "redis://127.0.0.1:6379" }
+$env:REDIS_URL   = "redis://127.0.0.1:6379/2"
 $p2 = Start-Process -FilePath ".\target\release\georedis-ais.exe" `
     -RedirectStandardOutput ".\target\ais-stdout.log" `
     -RedirectStandardError  ".\target\ais-stderr.log" `

@@ -15,7 +15,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         Self {
-            redis_url:          env("REDIS_URL",           "redis://127.0.0.1:6379"),
+            redis_url:          env("REDIS_URL",           "redis://127.0.0.1:6379/2"),
             server_host:        env("SERVER_HOST",         "0.0.0.0"),
             server_port:        env_parse("SERVER_PORT",   3002),
             s2_level:           env_parse("S2_LEVEL",      9),
