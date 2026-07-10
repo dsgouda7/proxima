@@ -4,6 +4,7 @@ import Topology      from './components/Topology';
 import { ThroughputChart, KeyDistribution } from './components/Charts';
 import EventLog      from './components/EventLog';
 import ControlPanel  from './components/ControlPanel';
+import WeatherPanel  from './components/WeatherPanel';
 import type { ClusterEvent } from './types';
 import { STATUS_COLOR } from './types';
 
@@ -134,10 +135,13 @@ export default function App() {
               Cluster events
               <span style={{ float: 'right', color: '#334155' }}>{events.length} total</span>
             </div>
-            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+            <div style={{ maxHeight: 300, overflowY: 'auto' }}>
               <EventLog events={events} />
             </div>
           </div>
+
+          {/* Weather stream panel */}
+          <WeatherPanel />
         </div>
       </div>
 
