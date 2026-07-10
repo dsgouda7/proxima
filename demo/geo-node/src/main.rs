@@ -215,9 +215,10 @@ async fn main() -> Result<()> {
     // ── HTTP server ───────────────────────────────────────────────────────
     // Write endpoints are protected by optional API-key auth.
     let write_routes = Router::new()
-        .route("/ingest",       post(route_ingest_batch))
-        .route("/split",        post(route_trigger_split))
-        .route("/assign-range", put(route_assign_range))
+        .route("/ingest",          post(route_ingest_batch))
+        .route("/ingest-snapshot", post(route_ingest_snapshot))
+        .route("/split",           post(route_trigger_split))
+        .route("/assign-range",    put(route_assign_range))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_key_guard));
 
     let app = Router::new()
@@ -293,8 +294,6 @@ async fn restore_from_snapshot(
     state: &AppState,
     snap:  &snapshot::Snapshot,
 ) -> anyhow::Result<bool> {
-    // AsyncCommands is in scope from the top-level import
-
     let snap_count = snap.count().await?;
     if snap_count == 0 {
         tracing::info!("Snapshot store is empty — cold start");
@@ -326,13 +325,24 @@ async fn restore_from_snapshot(
         );
     }
 
-    let n   = valid.len();
-    let ttl = state.cfg.entity_ttl_secs;
+    let n = valid.len();
 
     tracing::info!("Redis is empty — restoring {} entities from snapshot", n);
 
     // Chunked pipeline restore (only non-expired entries)
-    for chunk in valid.chunks(500) {
+    write_entries_to_redis(state, &valid).await?;
+
+    tracing::info!("Snapshot restore complete: {} entities loaded into Redis", n);
+    Ok(true)
+}
+
+/// Write snapshot entries directly to Redis — used by both startup restore
+/// and the live migration path (`/ingest-snapshot`).
+async fn write_entries_to_redis(state: &AppState, entries: &[snapshot::SnapshotEntry]) -> anyhow::Result<()> {
+    use redis::AsyncCommands;
+    let mut conn = state.redis.get_multiplexed_async_connection().await?;
+    let ttl = state.cfg.entity_ttl_secs;
+    for chunk in entries.chunks(500) {
         let mut pipe = redis::pipe();
         pipe.atomic();
         for e in chunk {
@@ -341,14 +351,11 @@ async fn restore_from_snapshot(
             let loc = format!("georedis:location:{}", e.id);
             pipe.set_ex(&ak,  &e.json,  ttl).ignore();
             pipe.sadd(&ck,    &e.id).ignore();
-            // Restore reverse lookup so the next ingest can detect cell moves
             pipe.set_ex(&loc, &e.token, ttl).ignore();
         }
         pipe.query_async::<()>(&mut conn).await?;
     }
-
-    tracing::info!("Snapshot restore complete: {} entities loaded into Redis", n);
-    Ok(true)
+    Ok(())
 }
 
 async fn gossip_loop(state: AppState) {
@@ -656,14 +663,36 @@ async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u
     let total = to_migrate.len() as u64;
     info!("Split: collected {} entities to migrate to {}", total, target);
 
-    // ── Phase 2: Send each chunk to target, delete from source only after confirmation
+    // ── Phase 2: For each chunk — build snapshot entries, deliver to target,
+    //             then delete from source only after confirmed persistence.
+    //
+    //   /ingest-snapshot writes to the target's SQLite first, then Redis.
+    //   If the target crashes after acknowledging, it can self-restore from
+    //   its snapshot on restart — no re-split required.
     for chunk in to_migrate.chunks(100) {
-        let entries: Vec<GeoEntry> = chunk.iter().map(|(_, e)| e.clone()).collect();
+        let snap_entries: Vec<snapshot::SnapshotEntry> = chunk.iter()
+            .map(|(_, entry)| snapshot::SnapshotEntry {
+                id:          entry.id.clone(),
+                json:        serde_json::to_string(entry).unwrap_or_default(),
+                token:       cell_token(entry.lat, entry.lon, s.cfg.s2_level),
+                snapshotted: unix_now() as i64,
+            })
+            .collect();
 
-        // Bail out (source keys intact) if target rejects the batch
-        post_ingest(s, target, entries).await?;
+        // Prefer /ingest-snapshot; fall back to /ingest for older nodes.
+        let resp = s.http
+            .post(format!("http://{target}/ingest-snapshot"))
+            .json(&snap_entries)
+            .send().await?;
 
-        // Target confirmed receipt — safe to delete from source
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Target {} rejected /ingest-snapshot ({}); split aborted — source keys intact",
+                target, resp.status()
+            );
+        }
+
+        // Target confirmed persistence — now safe to remove from source.
         for (key, _) in chunk {
             conn.del::<_, ()>(key).await?;
         }
@@ -696,6 +725,9 @@ async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u
     Ok(total)
 }
 
+/// Retained for backward compatibility with older nodes that don't support
+/// /ingest-snapshot. New splits exclusively use /ingest-snapshot.
+#[allow(dead_code)]
 async fn post_ingest(s: &AppState, target: &str, entries: Vec<GeoEntry>) -> Result<()> {
     s.http.post(format!("http://{target}/ingest"))
         .json(&entries)
@@ -780,6 +812,52 @@ async fn route_ingest_cell(
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+/// POST /ingest-snapshot — receive migrated entities from a splitting shard.
+///
+/// The source shard calls this instead of `/ingest` during a split so that
+/// the new branch is seeded from a durable snapshot rather than ephemeral
+/// in-memory state.  The two-step sequence is:
+///
+///   1. **Persist first** — entries are appended to this node's SQLite
+///      snapshot before touching Redis.  If this node crashes immediately
+///      after this call, it will auto-restore from the snapshot on restart
+///      without requiring a re-split.
+///
+///   2. **Restore to Redis** — entities are written to Redis so the shard
+///      becomes queryable immediately without waiting for the next restart.
+///
+/// Falls back gracefully if snapshotting is disabled (`SNAPSHOT_PATH` not
+/// set): entries are still written to Redis directly.
+async fn route_ingest_snapshot(
+    State(s):      State<AppState>,
+    Json(entries): Json<Vec<snapshot::SnapshotEntry>>,
+) -> StatusCode {
+    let n = entries.len();
+    tracing::info!("ingest-snapshot: receiving {} migrated entities", n);
+
+    // 1. Persist to SQLite snapshot (durable write-ahead)
+    if let Some(snap) = &s.snapshot {
+        if let Err(e) = snap.append(entries.iter().map(|e| snapshot::SnapshotEntry {
+            id:          e.id.clone(),
+            json:        e.json.clone(),
+            token:       e.token.clone(),
+            snapshotted: e.snapshotted,
+        }).collect()).await {
+            tracing::error!("Snapshot append failed during split ingest: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    // 2. Restore to Redis so the shard is immediately queryable
+    if let Err(e) = write_entries_to_redis(&s, &entries).await {
+        tracing::error!("Redis restore failed during split ingest: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    tracing::info!("ingest-snapshot: {} entities written to snapshot + Redis", n);
+    StatusCode::OK
 }
 
 // ── Assign range (from a splitting node) ─────────────────────────────────

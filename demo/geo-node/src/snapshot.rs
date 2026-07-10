@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS snapshot_log (
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+/// A single entity record transferred between nodes during a shard split.
+/// Derive Serialize/Deserialize so it can be sent as JSON over HTTP.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SnapshotEntry {
     pub id:          String,
     pub json:        String,
@@ -107,6 +110,34 @@ impl Snapshot {
         .await??;
 
         tracing::info!("Snapshot saved: {} entities", count);
+        Ok(count as u64)
+    }
+
+    /// Upserts `entries` into the snapshot without replacing existing records.
+    ///
+    /// Used during shard splits: the splitting node sends its half of the data
+    /// to the new shard's snapshot store. Existing entries (from the new
+    /// shard's own periodic snapshots) are preserved.
+    pub async fn append(&self, entries: Vec<SnapshotEntry>) -> Result<u64> {
+        let conn  = Arc::clone(&self.conn);
+        let count = entries.len() as i64;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut guard = conn.blocking_lock();
+            let tx = guard.transaction()?;
+            {
+                let mut upsert = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO entity_snapshot(id,json,token,snapshotted)
+                     VALUES(?1,?2,?3,?4)",
+                )?;
+                for e in &entries {
+                    upsert.execute(rusqlite::params![e.id, e.json, e.token, e.snapshotted])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+        tracing::info!("Snapshot append: {} entities merged", count);
         Ok(count as u64)
     }
 
