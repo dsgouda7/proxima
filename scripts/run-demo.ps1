@@ -30,6 +30,10 @@ param(
 Set-Location $PSScriptRoot\..
 $ErrorActionPreference = "Stop"
 
+# ── Ensure ~/.cargo/bin is on PATH (needed before prereq check) ───────────
+$cargoBin = "$env:USERPROFILE\.cargo\bin"
+if ($env:PATH -notlike "*$cargoBin*") { $env:PATH += ";$cargoBin" }
+
 # ── Prerequisites ─────────────────────────────────────────────────────────
 foreach ($cmd in @("cargo", "node", "npm", "docker")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
@@ -67,7 +71,6 @@ foreach ($dir in @("demo/ui", "demo/cluster-ui")) {
 # ── Build Rust binaries ───────────────────────────────────────────────────
 if (-not $SkipBuild) {
     Write-Host "Building backends (first build ~60s)..." -ForegroundColor Yellow
-    $env:PATH += ";$env:USERPROFILE\.cargo\bin"
     cargo build --release -p georedis-demo -p georedis-weather
     if ($LASTEXITCODE -ne 0) { Write-Error "Cargo build failed"; exit 1 }
 }
