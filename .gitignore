@@ -8,6 +8,8 @@ Cargo.lock       # Omit for libraries; keep for binaries. Remove this line
 demo/ui/node_modules/
 demo/ui/dist/
 demo/ui/.vite/
+demo/cluster-ui/node_modules/
+demo/cluster-ui/dist/
 package-lock.json
 
 # ── Environment / secrets ──────────────────────────────────────────────────
