@@ -1,3 +1,4 @@
+mod aggregate;
 mod config;
 mod db;
 mod metar_bulk;
@@ -52,8 +53,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Source: aviationweather.gov bulk METAR dump (updated every 5 min)");
     tracing::info!("Redis:  {}", cfg.redis_url);
     tracing::info!("SQLite: {}", cfg.sqlite_path);
-    tracing::info!("S2 level: {}, poll: {}s, stream rate: {}ms/event",
-        cfg.s2_level, cfg.poll_interval_secs, cfg.stream_rate_ms);
+    tracing::info!("S2 level: {}, poll: {}s, stream rate: {}ms/event, max clusters: {}",
+        cfg.s2_level, cfg.poll_interval_secs, cfg.stream_rate_ms, cfg.max_clusters);
 
     let state = Arc::new(AppState {
         trie:      RwLock::new(GeoTrie::new(cfg.s2_level)),
@@ -73,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
                 Ok(stations) if !stations.is_empty() => {
                     let total = stations.len();
 
+                    // ── 1. Persist all raw METAR observations to SQLite ────
+                    // (detail view / history; not shown on map)
                     let db_data: Vec<db::StationData> = stations.iter().map(|s| db::StationData {
                         id:        s.icao_id.clone(),
                         lat:       s.lat,
@@ -94,56 +97,62 @@ async fn main() -> anyhow::Result<()> {
                         tracing::error!("SQLite upsert: {e}");
                     }
 
-                    tracing::info!("Streaming {total} METAR events into trie…");
-                    for (n, s) in stations.iter().enumerate() {
-                        let wmo  = metar_bulk::wx_to_wmo(&s.wx, &s.sky);
-                        let temp = s.temp_c.unwrap_or(0.0);
+                    // ── 2. Aggregate into ≤ max_clusters spatial clusters ──
+                    let clusters = aggregate::aggregate(
+                        &stations,
+                        poll_state.config.max_clusters,
+                        poll_state.config.cluster_level,
+                    );
+                    let n_clusters = clusters.len();
 
+                    tracing::info!(
+                        "Streaming {} clusters (from {} raw stations) at {}ms/event…",
+                        n_clusters, total, poll_state.config.stream_rate_ms
+                    );
+
+                    // ── 3. Stream cluster events into the trie ────────────
+                    for (n, c) in clusters.iter().enumerate() {
                         let entry = GeoEntry {
-                            id:  s.icao_id.clone(),
-                            lat: s.lat,
-                            lon: s.lon,
+                            id:  c.id.clone(),
+                            lat: c.lat,
+                            lon: c.lon,
                             payload: serde_json::json!({
-                                "name":         s.icao_id,
-                                "temp_c":       s.temp_c,
+                                "name":         c.id,
+                                "temp_c":       c.temp_c,
                                 "feels_like_c": null,
                                 "humidity_pct": null,
-                                "wspd_kt":      s.wind_spd,
-                                "gust_kt":      s.wind_gst,
-                                "wdir":         s.wind_dir,
-                                "wmo_code":     wmo,
+                                "wspd_kt":      c.wind_spd,
+                                "gust_kt":      null,
+                                "wdir":         c.wind_dir,
+                                "wmo_code":     c.wmo_code,
                                 "precip":       null,
                                 "cloud_pct":    null,
                                 "pressure_hpa": null,
-                                "flt_cat":      s.flt_cat,
+                                "flt_cat":      c.flt_cat,
+                                "count":        c.count,
                                 "__is_weather": true,
                             }),
                         };
 
                         {
-                            let mut trie  = poll_state.trie.write().await;
-                            let mut pos   = poll_state.positions.write().await;
-                            if let Some(&(old_lat, old_lon)) = pos.get(&s.icao_id) {
-                                trie.remove_entry(old_lat, old_lon, &s.icao_id);
+                            let mut trie = poll_state.trie.write().await;
+                            let mut pos  = poll_state.positions.write().await;
+                            if let Some(&(old_lat, old_lon)) = pos.get(&c.id) {
+                                trie.remove_entry(old_lat, old_lon, &c.id);
                             }
                             trie.insert(entry);
-                            pos.insert(s.icao_id.clone(), (s.lat, s.lon));
-                        }
-
-                        if n % 200 == 199 {
-                            let trie = poll_state.trie.read().await;
-                            let _ = poll_state.store.persist_trie(&trie).await;
+                            pos.insert(c.id.clone(), (c.lat, c.lon));
                         }
 
                         let _ = poll_state.updates.send(StationEvent {
-                            n, total,
-                            complete:  n == total - 1,
-                            id:        s.icao_id.clone(),
-                            lat:       s.lat,
-                            lon:       s.lon,
-                            temp_c:    temp,
-                            condition: if s.wx.is_empty() { s.sky.clone() } else { s.wx.clone() },
-                            wmo_code:  wmo,
+                            n, total: n_clusters,
+                            complete:  n == n_clusters - 1,
+                            id:        c.id.clone(),
+                            lat:       c.lat,
+                            lon:       c.lon,
+                            temp_c:    c.temp_c.unwrap_or(0.0),
+                            condition: if c.wx.is_empty() { c.sky.clone() } else { c.wx.clone() },
+                            wmo_code:  c.wmo_code,
                         });
 
                         if poll_state.config.stream_rate_ms > 0 {
@@ -160,7 +169,10 @@ async fn main() -> anyhow::Result<()> {
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
                     *poll_state.last_sync.write().await = Some(ts);
-                    tracing::info!("Streaming complete — {total} stations live");
+                    tracing::info!(
+                        "Cycle complete: {} raw stations → {} clusters on map",
+                        total, n_clusters
+                    );
                 }
                 Ok(_) => tracing::warn!("Bulk METAR returned 0 stations"),
                 Err(e) => tracing::error!("Bulk METAR failed: {e}"),

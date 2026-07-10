@@ -60,17 +60,22 @@ function getTempColor(tempC: number): string {
   return '#a855f7';                    // purple — very cold
 }
 
-function makeWeatherIcon(wmoCode: number, tempC: number, windDir: number | null | undefined): L.DivIcon {
+function makeWeatherIcon(wmoCode: number, tempC: number, windDir: number | null | undefined, count = 1): L.DivIcon {
   const emoji  = WMO_EMOJI[wmoCode] ?? '🌡️';
   const bg     = getTempColor(tempC);
   const temp   = Math.round(tempC);
   const sign   = temp > 0 ? '+' : '';
+  // Scale size slightly by station count (log scale so it doesn't get enormous)
+  const size   = Math.min(52, 34 + Math.floor(Math.log2(count + 1) * 2));
   const wdArrow = windDir != null
     ? `<div style="position:absolute;top:1px;right:2px;font-size:9px;line-height:1;transform:rotate(${windDir}deg)">↑</div>`
     : '';
+  const countBadge = count > 1
+    ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:#0f172a;color:#94a3b8;font-size:7px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap;border:1px solid rgba(255,255,255,0.15)">${count}</div>`
+    : '';
   const html = `<div style="
       position:relative;
-      width:38px;height:38px;
+      width:${size}px;height:${size}px;
       background:${bg};
       border-radius:50%;
       display:flex;flex-direction:column;
@@ -80,14 +85,15 @@ function makeWeatherIcon(wmoCode: number, tempC: number, windDir: number | null 
       line-height:1;
     ">
     ${wdArrow}
-    <span style="font-size:17px">${emoji}</span>
-    <span style="font-size:8px;font-weight:700;color:#fff;margin-top:1px;text-shadow:0 1px 2px rgba(0,0,0,0.7)">${sign}${temp}°</span>
+    <span style="font-size:${Math.round(size * 0.45)}px">${emoji}</span>
+    <span style="font-size:${Math.round(size * 0.22)}px;font-weight:700;color:#fff;margin-top:1px;text-shadow:0 1px 2px rgba(0,0,0,0.7)">${sign}${temp}°</span>
+    ${countBadge}
   </div>`;
   return L.divIcon({
     html, className: '',
-    iconSize:      [38, 38],
-    iconAnchor:    [19, 19],
-    tooltipAnchor: [22, -19],
+    iconSize:      [size, size + 8],
+    iconAnchor:    [size / 2, size / 2],
+    tooltipAnchor: [size / 2 + 4, -size / 2],
   });
 }
 
@@ -104,8 +110,8 @@ export default function AircraftMarker({ aircraft, onClick }: Props) {
 
   const weatherIcon = useMemo(() => {
     if (!isWeather) return null;
-    return makeWeatherIcon(payload.wmo_code ?? 0, payload.temp_c ?? 0, payload.heading);
-  }, [isWeather, payload.wmo_code, payload.temp_c, payload.heading]);
+    return makeWeatherIcon(payload.wmo_code ?? 0, payload.temp_c ?? 0, payload.heading, payload.count ?? 1);
+  }, [isWeather, payload.wmo_code, payload.temp_c, payload.heading, payload.count]);
 
   if (isWeather && weatherIcon) {
     const tempC   = payload.temp_c ?? 0;
@@ -119,6 +125,7 @@ export default function AircraftMarker({ aircraft, onClick }: Props) {
     const precip  = payload.precip;
     const wdir    = payload.heading;
     const wspd    = payload.velocity;
+    const count   = payload.count ?? 1;
 
     // Compass direction from degrees
     const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
@@ -142,6 +149,11 @@ export default function AircraftMarker({ aircraft, onClick }: Props) {
             <div style={{ fontWeight: 700, fontSize: 14, color: '#fff', marginBottom: 2 }}>
               {emoji} {payload.callsign ?? id}
             </div>
+            {count > 1 && (
+              <div style={{ fontSize: 10, color: '#60a5fa', marginBottom: 2 }}>
+                {count} stations · median values
+              </div>
+            )}
             <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 8 }}>
               {payload.origin_country ?? '—'}
             </div>

@@ -38,15 +38,28 @@ fn station_to_aircraft(mut e: GeoEntry) -> GeoEntry {
     let pressure    = e.payload["pressure_hpa"].as_f64();
     let precip      = e.payload["precip"].as_f64();
     let wmo         = e.payload["wmo_code"].as_u64().unwrap_or(0) as u8;
+    let count       = e.payload["count"].as_u64().unwrap_or(1);
+    let flt_cat     = e.payload["flt_cat"].as_str().unwrap_or("").to_string();
+
+    // Cluster nodes have ID like "wx:{s2_token}"; show readable count label
+    let display_name = if name.starts_with("wx:") {
+        format!("{} stations", count)
+    } else {
+        name
+    };
+
+    let condition_label = {
+        let base = format!("{} {}", open_meteo::wmo_emoji(wmo), open_meteo::wmo_label(wmo));
+        if flt_cat.is_empty() { base } else { format!("{base}  {flt_cat}") }
+    };
 
     e.payload = serde_json::json!({
-        "callsign":       name,
+        "callsign":       display_name,
         "altitude":       open_meteo::temp_to_altitude_m(temp_c),
         "velocity":       wspd,
         "heading":        wdir,
         "on_ground":      false,
-        "origin_country": format!("{} {}", open_meteo::wmo_emoji(wmo), open_meteo::wmo_label(wmo)),
-        // UI-specific extras
+        "origin_country": condition_label,
         "__is_weather":   true,
         "temp_c":         temp_c,
         "feels_like_c":   feels_like,
@@ -56,6 +69,7 @@ fn station_to_aircraft(mut e: GeoEntry) -> GeoEntry {
         "pressure_hpa":   pressure,
         "precip":         precip,
         "wmo_code":       wmo,
+        "count":          count,
     });
     e
 }

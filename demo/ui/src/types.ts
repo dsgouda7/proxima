@@ -23,6 +23,8 @@ export interface AircraftPayload {
   pressure_hpa?:    number | null;
   /** Precipitation mm/h */
   precip?:          number | null;
+  /** Number of raw METAR stations aggregated into this cluster node */
+  count?:           number | null;
   /** WMO weather interpretation code (0=clear … 99=thunderstorm+hail) */
   wmo_code?:        number | null;
 }
