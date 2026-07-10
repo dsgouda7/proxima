@@ -1,5 +1,5 @@
 [workspace]
-members  = ["lib", "demo/server", "demo/loadtest", "demo/geo-node"]
+members  = ["lib", "demo/server", "demo/adsb-server", "demo/ais-server", "demo/loadtest", "demo/geo-node"]
 resolver = "2"
 
 [workspace.dependencies]

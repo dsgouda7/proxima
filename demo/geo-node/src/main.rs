@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     routing::{delete, get, post, put},
     Json, Router,
@@ -37,9 +37,14 @@ struct Config {
     prefix_end:   String,
     seed_peers:   Vec<String>,
     s2_level:     u8,
-    // ── Auto-split/merge thresholds ───────────────────────────────────────
+    // Auto-split/merge thresholds — documented in README + K8s configmap.
+    // Read at startup and stored for a future automatic-split trigger;
+    // splits are currently initiated via POST /split.
+    #[allow(dead_code)]
     split_threshold_keys:      u64,
+    #[allow(dead_code)]
     split_threshold_write_qps: f64,
+    #[allow(dead_code)]
     merge_threshold_keys:      u64,
     // ── Gossip timing ─────────────────────────────────────────────────────
     suspect_secs:           u64,
@@ -258,7 +263,7 @@ async fn take_snapshot(state: &AppState, snap: &snapshot::Snapshot) -> anyhow::R
 
     loop {
         let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cursor).arg("MATCH").arg("georedis:aircraft:*").arg("COUNT").arg(200)
+            .arg(cursor).arg("MATCH").arg("georedis:entity:*").arg("COUNT").arg(200)
             .query_async(&mut conn).await?;
 
         for key in keys {
@@ -288,7 +293,7 @@ async fn restore_from_snapshot(
     state: &AppState,
     snap:  &snapshot::Snapshot,
 ) -> anyhow::Result<bool> {
-    use redis::AsyncCommands;
+    // AsyncCommands is in scope from the top-level import
 
     let snap_count = snap.count().await?;
     if snap_count == 0 {
@@ -331,7 +336,7 @@ async fn restore_from_snapshot(
         let mut pipe = redis::pipe();
         pipe.atomic();
         for e in chunk {
-            let ak  = format!("georedis:aircraft:{}", e.id);
+            let ak  = format!("georedis:entity:{}", e.id);
             let ck  = format!("georedis:cell:{}", e.token);
             let loc = format!("georedis:location:{}", e.id);
             pipe.set_ex(&ak,  &e.json,  ttl).ignore();
@@ -377,10 +382,10 @@ async fn gossip_loop(state: AppState) {
             match state.http.post(&url).json(&my_info).send().await {
                 Ok(resp) => {
                     if let Ok(their_state) = resp.json::<NodeInfo>().await {
-                        state.ring.write().await.merge(their_state);
-                        // Update last_seen for this peer in ring
-                        let mut ring = state.ring.write().await;
                         let now = unix_now();
+                        let mut ring = state.ring.write().await;
+                        ring.merge(their_state);
+                        // Update last_seen in the same lock acquisition
                         for n in ring.all_nodes().cloned().collect::<Vec<_>>() {
                             if n.addr == peer {
                                 let mut updated = n.clone();
@@ -581,7 +586,7 @@ async fn find_median_split(s: &AppState) -> Result<String> {
 
     loop {
         let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cursor).arg("MATCH").arg("georedis:aircraft:*").arg("COUNT").arg(200)
+            .arg(cursor).arg("MATCH").arg("georedis:entity:*").arg("COUNT").arg(200)
             .query_async(&mut conn).await?;
 
         for key in keys {
@@ -613,16 +618,24 @@ async fn find_median_split(s: &AppState) -> Result<String> {
     Ok(split_at)
 }
 
-/// Migrate all aircraft + cell keys with token >= split_point to the target node.
+/// Migrate all entity + cell keys with token >= split_point to the target node.
+///
+/// Two-phase collect-then-delete ensures idempotency:
+///   Phase 1 — Scan and collect matching keys (read-only, nothing deleted yet).
+///   Phase 2 — For each chunk: POST to target, confirm 2xx, THEN delete from source.
+///
+/// If delivery fails mid-way, source keys are still intact so the split can be
+/// retried safely. The target's /ingest endpoint is idempotent (upsert).
 async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u64> {
     let mut conn = s.redis.get_multiplexed_async_connection().await?;
-    let mut batch: Vec<GeoEntry> = Vec::new();
+
+    // ── Phase 1: Collect matching entity keys (no mutations yet) ──────────
+    let mut to_migrate: Vec<(String, GeoEntry)> = Vec::new();
     let mut cursor = 0u64;
-    let mut migrated = 0u64;
 
     loop {
         let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cursor).arg("MATCH").arg("georedis:aircraft:*").arg("COUNT").arg(100)
+            .arg(cursor).arg("MATCH").arg("georedis:entity:*").arg("COUNT").arg(200)
             .query_async(&mut conn).await?;
 
         for key in keys {
@@ -630,17 +643,9 @@ async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u
                 if let Ok(entry) = serde_json::from_str::<GeoEntry>(&json) {
                     let token = cell_token(entry.lat, entry.lon, s.cfg.s2_level);
                     if token.as_str() >= split_point {
-                        batch.push(entry);
-                        conn.del::<_, ()>(&key).await?;
+                        to_migrate.push((key, entry));
                     }
                 }
-            }
-
-            // Ship in batches of 100
-            if batch.len() >= 100 {
-                let n = batch.len() as u64;
-                post_ingest(s, target, std::mem::take(&mut batch)).await?;
-                migrated += n;
             }
         }
 
@@ -648,12 +653,23 @@ async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u
         if cursor == 0 { break; }
     }
 
-    if !batch.is_empty() {
-        migrated += batch.len() as u64;
-        post_ingest(s, target, batch).await?;
+    let total = to_migrate.len() as u64;
+    info!("Split: collected {} entities to migrate to {}", total, target);
+
+    // ── Phase 2: Send each chunk to target, delete from source only after confirmation
+    for chunk in to_migrate.chunks(100) {
+        let entries: Vec<GeoEntry> = chunk.iter().map(|(_, e)| e.clone()).collect();
+
+        // Bail out (source keys intact) if target rejects the batch
+        post_ingest(s, target, entries).await?;
+
+        // Target confirmed receipt — safe to delete from source
+        for (key, _) in chunk {
+            conn.del::<_, ()>(key).await?;
+        }
     }
 
-    // Also migrate cell index keys for tokens >= split_point
+    // ── Phase 3: Migrate cell index keys for tokens >= split_point ────────
     cursor = 0;
     loop {
         let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
@@ -677,7 +693,7 @@ async fn migrate_keys(s: &AppState, target: &str, split_point: &str) -> Result<u
         if cursor == 0 { break; }
     }
 
-    Ok(migrated)
+    Ok(total)
 }
 
 async fn post_ingest(s: &AppState, target: &str, entries: Vec<GeoEntry>) -> Result<()> {
@@ -708,7 +724,7 @@ async fn route_ingest_batch(
 
     for entry in &entries {
         let new_token = cell_token(entry.lat, entry.lon, s.cfg.s2_level);
-        let ak        = format!("{prefix}:aircraft:{}", entry.id);
+        let ak        = format!("{prefix}:entity:{}", entry.id);
         let new_ck    = format!("{prefix}:cell:{new_token}");
         let loc_key   = format!("{prefix}:location:{}", entry.id);
         let json      = serde_json::to_string(entry).unwrap_or_default();
@@ -819,17 +835,17 @@ async fn route_delete_entity(
         return StatusCode::SERVICE_UNAVAILABLE;
     };
 
-    let aircraft_key = format!("georedis:aircraft:{id}");
+    let entity_key = format!("georedis:entity:{id}");
     let loc_key      = format!("georedis:location:{id}");
 
     if let Some(token) = p.token {
         let cell_key = format!("georedis:cell:{token}");
-        let _: () = conn.del(&aircraft_key).await.unwrap_or(());
+        let _: () = conn.del(&entity_key).await.unwrap_or(());
         let _: () = conn.del(&loc_key).await.unwrap_or(());
         let _: () = conn.srem(&cell_key, &id).await.unwrap_or(());
         tracing::info!("Deleted entity {id} from cell {token}");
     } else {
-        let _: () = conn.del(&aircraft_key).await.unwrap_or(());
+        let _: () = conn.del(&entity_key).await.unwrap_or(());
         let _: () = conn.del(&loc_key).await.unwrap_or(());
         let mut cursor = 0u64;
         loop {
@@ -891,9 +907,14 @@ async fn api_key_guard(
     next:     Next,
 ) -> Result<axum::response::Response, StatusCode> {
     if s.cfg.api_key.is_empty() { return Ok(next.run(req).await); }
-    let key = req.headers()
+    let provided = req.headers()
         .get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if key == s.cfg.api_key { Ok(next.run(req).await) }
+    // Constant-time comparison prevents timing-oracle key enumeration.
+    let valid: bool = subtle::ConstantTimeEq::ct_eq(
+        s.cfg.api_key.as_bytes(),
+        provided.as_bytes(),
+    ).into();
+    if valid { Ok(next.run(req).await) }
     else {
         tracing::warn!("Rejected: missing or invalid X-API-Key");
         Err(StatusCode::UNAUTHORIZED)

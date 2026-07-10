@@ -334,7 +334,7 @@ async fn sharded_writer_task(
                 pipe.atomic();
                 for entry in chunk {
                     let token = trie.cell_token(entry.lat, entry.lon);
-                    let ak    = format!("{prefix}:aircraft:{}", entry.id);
+                    let ak    = format!("{prefix}:entity:{}", entry.id);
                     let ck    = format!("{prefix}:cell:{token}");
                     let js    = serde_json::to_string(entry).unwrap_or_default();
                     pipe.set_ex(&ak, &js, TTL).ignore();

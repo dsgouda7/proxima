@@ -102,9 +102,8 @@ impl RedisStore {
         let ttl_i  = ttl as i64;
         let mut conn = self.client.get_multiplexed_async_connection().await?;
 
-        // ── Step 1: Load previous active-cell set ─────────────────────────
+        // ── Step 1: Prepare active-cells key (diff computed server-side in Lua) ──
         let active_key = format!("{prefix}:active_cells");
-        let prev_cells: HashSet<String> = conn.smembers(&active_key).await?;
 
         // ── Step 2: Write entities + location reverse-lookup ──────────────
         let mut new_cells: HashSet<String> = HashSet::with_capacity(entries.len() / 4);
@@ -114,7 +113,7 @@ impl RedisStore {
             pipe.atomic();
             for entry in chunk {
                 let token    = trie.cell_token(entry.lat, entry.lon);
-                let ak       = format!("{prefix}:aircraft:{}", entry.id);
+                let ak       = format!("{prefix}:entity:{}", entry.id);
                 let ck       = format!("{prefix}:cell:{token}");
                 let loc_key  = format!("{prefix}:location:{}", entry.id);
                 let json     = serde_json::to_string(entry)?;
@@ -171,7 +170,7 @@ impl RedisStore {
 
         let mut pipe = redis::pipe();
         for id in &ids {
-            pipe.get(format!("{}:aircraft:{}", self.key_prefix, id));
+            pipe.get(format!("{}:entity:{}", self.key_prefix, id));
         }
         let jsons: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
 

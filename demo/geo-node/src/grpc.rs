@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tonic::{async_trait, codegen::*, Request, Response, Status};
 use georedis::GeoEntry;
 use redis::AsyncCommands;
-use crate::{cell_token, viewport_tokens, AppState};
+use crate::{cell_token, viewport_tokens};
 
 // ── Proto messages ─────────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ impl GeoRedisGrpc for GeoRedisService {
         let mut conn = self.state.redis.get_multiplexed_async_connection().await
             .map_err(|e| Status::internal(e.to_string()))?;
         let new_tok = cell_token(e.lat, e.lon, s2l);
-        let ak  = format!("georedis:aircraft:{}", e.id);
+        let ak  = format!("georedis:entity:{}", e.id);
         let ck  = format!("georedis:cell:{new_tok}");
         let loc = format!("georedis:location:{}", e.id);
         let js  = serde_json::to_string(&geo).unwrap_or_default();
