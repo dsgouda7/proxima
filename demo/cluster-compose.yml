@@ -1,0 +1,163 @@
+# GeoRedis Distributed Cluster — 3 active shards + 1 standby
+#
+# Geo split of the S2 token ring:
+#
+#  redis-0 / geo-node-0  →  prefix ["",  "5")  Americas + West Africa
+#  redis-1 / geo-node-1  →  prefix ["5", "a")  Europe + Middle East + Asia
+#  redis-2 / geo-node-2  →  prefix ["a", "" )  East Asia + Pacific + Antarctica
+#  redis-3 / geo-node-3  →  STANDBY (empty prefix = not yet assigned)
+#
+# Usage:
+#   docker compose -f demo/cluster-compose.yml up -d
+#   curl http://localhost:4000/cluster | jq
+#   curl -X POST http://localhost:4000/split \
+#        -H "Content-Type: application/json" \
+#        -d '{"target":"geo-node-3:4003","split_point":"3"}'
+
+services:
+
+  # ── Shard 0 — Americas ──────────────────────────────────────────────────
+  redis-0:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  geo-node-0:
+    build:
+      context: ../
+      dockerfile: demo/geo-node/Dockerfile
+    environment:
+      NODE_ID:      node-0
+      NODE_ADDR:    geo-node-0:4000
+      HTTP_PORT:    "4000"
+      REDIS_URL:    redis://redis-0:6379
+      PREFIX_START: ""
+      PREFIX_END:   "5"
+      SEED_PEERS:   "geo-node-1:4001,geo-node-2:4002,geo-node-3:4003"
+      S2_LEVEL:     "9"
+      SNAPSHOT_PATH:          /data/snapshot.db
+      SNAPSHOT_INTERVAL_SECS: "300"
+      ENTITY_TTL_SECS:        "120"
+      RUST_LOG:     info
+    volumes:
+      - geo-node-0-data:/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      redis-0:
+        condition: service_healthy
+
+  # ── Shard 1 — Europe / Asia ─────────────────────────────────────────────
+  redis-1:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  geo-node-1:
+    build:
+      context: ../
+      dockerfile: demo/geo-node/Dockerfile
+    environment:
+      NODE_ID:      node-1
+      NODE_ADDR:    geo-node-1:4001
+      HTTP_PORT:    "4001"
+      REDIS_URL:    redis://redis-1:6379
+      PREFIX_START: "5"
+      PREFIX_END:   "a"
+      SEED_PEERS:   "geo-node-0:4000,geo-node-2:4002,geo-node-3:4003"
+      S2_LEVEL:     "9"
+      SNAPSHOT_PATH:          /data/snapshot.db
+      SNAPSHOT_INTERVAL_SECS: "300"
+      ENTITY_TTL_SECS:        "120"
+      RUST_LOG:     info
+    volumes:
+      - geo-node-1-data:/data
+    ports:
+      - "4001:4001"
+    depends_on:
+      redis-1:
+        condition: service_healthy
+
+  # ── Shard 2 — Pacific / Antarctica ──────────────────────────────────────
+  redis-2:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  geo-node-2:
+    build:
+      context: ../
+      dockerfile: demo/geo-node/Dockerfile
+    environment:
+      NODE_ID:      node-2
+      NODE_ADDR:    geo-node-2:4002
+      HTTP_PORT:    "4002"
+      REDIS_URL:    redis://redis-2:6379
+      PREFIX_START: "a"
+      PREFIX_END:   ""
+      SEED_PEERS:   "geo-node-0:4000,geo-node-1:4001,geo-node-3:4003"
+      S2_LEVEL:     "9"
+      SNAPSHOT_PATH:          /data/snapshot.db
+      SNAPSHOT_INTERVAL_SECS: "300"
+      ENTITY_TTL_SECS:        "120"
+      RUST_LOG:     info
+    volumes:
+      - geo-node-2-data:/data
+    ports:
+      - "4002:4002"
+    depends_on:
+      redis-2:
+        condition: service_healthy
+
+  # ── Shard 3 — Standby (starts empty, available for split) ───────────────
+  redis-3:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  geo-node-3:
+    build:
+      context: ../
+      dockerfile: demo/geo-node/Dockerfile
+    environment:
+      NODE_ID:      node-3
+      NODE_ADDR:    geo-node-3:4003
+      HTTP_PORT:    "4003"
+      REDIS_URL:    redis://redis-3:6379
+      PREFIX_START: ""        # empty = standby, not yet assigned
+      PREFIX_END:   ""
+      SEED_PEERS:   "geo-node-0:4000,geo-node-1:4001,geo-node-2:4002"
+      S2_LEVEL:     "9"
+      SNAPSHOT_PATH:          /data/snapshot.db
+      SNAPSHOT_INTERVAL_SECS: "300"
+      ENTITY_TTL_SECS:        "120"
+      RUST_LOG:     info
+    volumes:
+      - geo-node-3-data:/data
+    ports:
+      - "4003:4003"
+    depends_on:
+      redis-3:
+        condition: service_healthy
+
+volumes:
+  geo-node-0-data:
+  geo-node-1-data:
+  geo-node-2-data:
+  geo-node-3-data:

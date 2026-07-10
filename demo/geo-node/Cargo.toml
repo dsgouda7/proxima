@@ -1,0 +1,24 @@
+[package]
+name        = "georedis-geo-node"
+version     = "0.1.0"
+edition     = "2021"
+description = "Geo-sharded Redis cluster node with SWIM-lite gossip and auto-split"
+
+[dependencies]
+georedis           = { path = "../../lib" }
+tokio              = { version = "1", features = ["full"] }
+axum               = "0.7"
+tower-http         = { version = "0.5", features = ["cors"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+redis              = { version = "0.26", features = ["tokio-comp"] }
+reqwest            = { version = "0.12", features = ["json"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow             = "1"
+dotenvy            = "0.15"
+rand               = "0.8"
+s2                 = "0.0.10"
+rusqlite           = { version = "0.31", features = ["bundled"] }
+tonic              = { version = "0.11", features = ["codegen", "transport"] }
+prost              = "0.12"

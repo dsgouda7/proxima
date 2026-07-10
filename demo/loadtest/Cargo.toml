@@ -1,0 +1,17 @@
+[package]
+name    = "georedis-loadtest"
+version = "0.1.0"
+edition = "2021"
+description = "Production-scale load test for the georedis S2 trie + Redis stack"
+
+[dependencies]
+georedis      = { path = "../../lib" }
+tokio         = { version = "1", features = ["full"] }
+redis         = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
+serde_json    = "1"
+rand          = "0.8"
+hdrhistogram  = "7"
+clap          = { version = "4", features = ["derive", "env"] }
+anyhow        = "1"
+dotenvy       = "0.15"
+s2            = "0.0.10"

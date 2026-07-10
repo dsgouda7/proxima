@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 160">
+  <!-- Wide-body commercial jet (top-down) e.g. Boeing 777 / A380 -->
+  <!-- Fuselage -->
+  <ellipse cx="50" cy="78" rx="7" ry="65" fill="#1e40af"/>
+  <!-- Main wings (swept back, wide) -->
+  <path d="M45,58 Q25,68 4,82 L5,88 Q26,76 45,67Z" fill="#2563eb"/>
+  <path d="M55,58 Q75,68 96,82 L95,88 Q74,76 55,67Z" fill="#2563eb"/>
+  <!-- Engine nacelles - 2 per wing -->
+  <ellipse cx="21" cy="78" rx="4" ry="8" fill="#1e3a8a"/>
+  <ellipse cx="33" cy="72" rx="4" ry="8" fill="#1e3a8a"/>
+  <ellipse cx="79" cy="78" rx="4" ry="8" fill="#1e3a8a"/>
+  <ellipse cx="67" cy="72" rx="4" ry="8" fill="#1e3a8a"/>
+  <!-- Horizontal stabilizer -->
+  <path d="M44,124 Q32,130 26,135 L27,138 Q33,133 44,128Z" fill="#2563eb"/>
+  <path d="M56,124 Q68,130 74,135 L73,138 Q67,133 56,128Z" fill="#2563eb"/>
+  <!-- Vertical fin (center line) -->
+  <rect x="48.5" y="118" width="3" height="18" rx="1" fill="#1e3a8a" opacity="0.6"/>
+  <!-- Cockpit windows -->
+  <ellipse cx="50" cy="18" rx="3.5" ry="5" fill="#93c5fd" opacity="0.7"/>
+</svg>

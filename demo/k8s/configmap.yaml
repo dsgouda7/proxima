@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: georedis-ring
+  namespace: georedis
+data:
+  S2_LEVEL: "12"
+  GEO_NODE_0_PREFIX_START: ""
+  GEO_NODE_0_PREFIX_END:   "5"
+  GEO_NODE_1_PREFIX_START: "5"
+  GEO_NODE_1_PREFIX_END:   "a"
+  GEO_NODE_2_PREFIX_START: "a"
+  GEO_NODE_2_PREFIX_END:   ""
+  SPLIT_THRESHOLD_KEYS:      "500000"
+  SPLIT_THRESHOLD_WRITE_QPS: "50000"
+  MERGE_THRESHOLD_KEYS:      "25000"
+  SUSPECT_SECS:              "10"
+  DEAD_SECS:                 "30"
+  # Snapshot — Redis state is checkpointed to SQLite every 5 min.
+  # On restart with empty Redis, the node self-heals from this snapshot
+  # instead of waiting for the next write cycle.
+  SNAPSHOT_INTERVAL_SECS: "300"
+  # Entity TTL in seconds. Set to 2x your write interval so stale
+  # cross-shard data expires promptly when entities move regions.
+  ENTITY_TTL_SECS: "120"

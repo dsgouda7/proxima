@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 150">
+  <!-- Narrow-body commercial jet (top-down) e.g. Boeing 737 / A320 -->
+  <!-- Fuselage -->
+  <ellipse cx="40" cy="74" rx="5" ry="62" fill="#0369a1"/>
+  <!-- Main wings -->
+  <path d="M36,56 Q18,64 3,76 L4,81 Q19,71 36,64Z" fill="#0284c7"/>
+  <path d="M44,56 Q62,64 77,76 L76,81 Q61,71 44,64Z" fill="#0284c7"/>
+  <!-- Engine nacelles - 1 per wing -->
+  <ellipse cx="18" cy="72" rx="4" ry="7.5" fill="#075985"/>
+  <ellipse cx="62" cy="72" rx="4" ry="7.5" fill="#075985"/>
+  <!-- Horizontal stabilizer -->
+  <path d="M35,118 Q24,124 19,129 L20,131 Q25,126 35,121Z" fill="#0284c7"/>
+  <path d="M45,118 Q56,124 61,129 L60,131 Q55,126 45,121Z" fill="#0284c7"/>
+  <!-- Vertical fin -->
+  <rect x="38.5" y="114" width="3" height="16" rx="1" fill="#075985" opacity="0.7"/>
+  <!-- Nose -->
+  <ellipse cx="40" cy="15" rx="4" ry="7" fill="#0c4a6e"/>
+</svg>

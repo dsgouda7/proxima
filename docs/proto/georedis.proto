@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package georedis.v1;
+
+// GeoRedis — distributed S2-keyed geospatial trie for real-time dynamic objects.
+// This proto is the canonical cross-platform interface.
+// Implementations: Rust (geo-node), .NET, Python, Go clients in docs/
+
+service GeoRedis {
+  // Insert or update a single geographic entity
+  rpc Insert (GeoEntry) returns (InsertResponse);
+
+  // Batch insert — more efficient for bulk position updates
+  rpc InsertBatch (InsertBatchRequest) returns (InsertResponse);
+
+  // Query all entities within a bounding-box viewport
+  // Routes to 1–3 shards based on S2 token prefix; results merged client-side
+  rpc QueryRegion (RegionRequest) returns (GeoEntriesResponse);
+
+  // Fetch full metadata + position history for a single entity (from SQLite)
+  // Only call this when < 5 entities are in view — lazy hydration pattern
+  rpc GetDetail (DetailRequest) returns (EntityDetail);
+
+  // Returns the cluster ring: all known nodes, prefix ranges, load metrics
+  rpc GetCluster (Empty) returns (ClusterResponse);
+
+  // Prove routing: shows which shard owns a coordinate without writing data
+  rpc TraceCoordinate (TraceRequest) returns (TraceResponse);
+}
+
+// ── Messages ───────────────────────────────────────────────────────────────
+
+message GeoEntry {
+  // Unique identifier for the entity (e.g. vehicle ID, courier ID, ICAO24)
+  string id          = 1;
+  double lat         = 2;
+  double lon         = 3;
+  // Arbitrary metadata as a JSON string (kept small — heavy data goes to SQLite)
+  string payload_json = 4;
+}
+
+message InsertBatchRequest {
+  repeated GeoEntry entries = 1;
+}
+
+message InsertResponse {
+  bool   success       = 1;
+  uint32 entries_written = 2;
+  string error         = 3;
+}
+
+message RegionRequest {
+  double south = 1;
+  double west  = 2;
+  double north = 3;
+  double east  = 4;
+}
+
+message GeoEntriesResponse {
+  repeated GeoEntry entries = 1;
+  uint32            count   = 2;
+  // Which shards were queried for this response (for observability)
+  repeated string   shards_queried = 3;
+}
+
+message DetailRequest {
+  string id = 1;
+}
+
+message EntityDetail {
+  string         id             = 1;
+  string         payload_json   = 2;
+  // Last 1–3 positions, oldest first
+  repeated LatLon history       = 3;
+  bool           found          = 4;
+}
+
+message LatLon {
+  double lat = 1;
+  double lon = 2;
+}
+
+message TraceRequest {
+  double lat = 1;
+  double lon = 2;
+}
+
+message TraceResponse {
+  double lat                  = 1;
+  double lon                  = 2;
+  string s2_token             = 3;
+  string token_prefix_2       = 4;
+  string owning_node_id       = 5;
+  string owning_prefix_range  = 6;
+  // The node that actually answered this RPC (may differ from owner if routing table is stale)
+  string served_by            = 7;
+  bool   is_local             = 8;
+  repeated ShardInfo all_shards = 9;
+}
+
+message ShardInfo {
+  string node_id      = 1;
+  string prefix_range = 2;
+  bool   owns_token   = 3;
+  string status       = 4;
+}
+
+message ClusterResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message NodeInfo {
+  string node_id      = 1;
+  string addr         = 2;
+  string prefix_start = 3;
+  string prefix_end   = 4;
+  uint64 key_count    = 5;
+  uint64 mem_bytes    = 6;
+  string status       = 7;
+  uint64 generation   = 8;
+}
+
+message Empty {}

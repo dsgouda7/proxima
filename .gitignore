@@ -1,0 +1,62 @@
+# ── Rust ───────────────────────────────────────────────────────────────────
+/target/
+**/*.rs.bk       # Rust backup files
+Cargo.lock       # Omit for libraries; keep for binaries. Remove this line
+                 # if you want reproducible binary builds committed.
+
+# ── Node / UI ──────────────────────────────────────────────────────────────
+demo/ui/node_modules/
+demo/ui/dist/
+demo/ui/.vite/
+package-lock.json
+
+# ── Environment / secrets ──────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Local runtime databases ────────────────────────────────────────────────
+# Generated at startup by georedis-demo (SQLite metadata store) and
+# geo-node (snapshot store). Never commit — they contain ephemeral state.
+*.db
+*.db-shm
+*.db-wal
+
+# ── Logs ───────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── IDE / editor ───────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/settings.json   # Commit .vscode/extensions.json but not personal settings
+*.swp
+*.swo
+*~
+
+# ── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Docker ─────────────────────────────────────────────────────────────────
+# Named Docker volumes are external — their data lives outside the repo.
+# Nothing to ignore here. Compose files ARE committed.
+
+# ── K8s / Helm ─────────────────────────────────────────────────────────────
+# Rendered manifests or secret overrides if you use kustomize overlays locally
+demo/k8s/overlays/local/
+secrets.yaml
+
+# ── Benchmarks / profiling output ──────────────────────────────────────────
+criterion/
+flamegraph.svg
+perf.data
+perf.data.old

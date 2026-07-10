@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 140">
+  <!-- Cargo / freighter aircraft (top-down) e.g. 747F, An-124 -->
+  <!-- Wide boxy fuselage -->
+  <ellipse cx="40" cy="70" rx="9" ry="58" fill="#b45309"/>
+  <!-- Upswept nose (freighter characteristic) -->
+  <path d="M31,14 Q40,2 49,14 L46,22 Q40,8 34,22Z" fill="#d97706"/>
+  <!-- High-set wings -->
+  <path d="M33,52 Q16,58 2,68 L3,73 Q18,64 33,59Z" fill="#d97706"/>
+  <path d="M47,52 Q64,58 78,68 L77,73 Q62,64 47,59Z" fill="#d97706"/>
+  <!-- 4 engine nacelles -->
+  <ellipse cx="14" cy="68" rx="4.5" ry="8" fill="#92400e"/>
+  <ellipse cx="25" cy="63" rx="4.5" ry="8" fill="#92400e"/>
+  <ellipse cx="66" cy="68" rx="4.5" ry="8" fill="#92400e"/>
+  <ellipse cx="55" cy="63" rx="4.5" ry="8" fill="#92400e"/>
+  <!-- Horizontal stabilizer -->
+  <path d="M33,116 Q20,122 14,126 L15,129 Q21,125 33,120Z" fill="#d97706"/>
+  <path d="M47,116 Q60,122 66,126 L65,129 Q59,125 47,120Z" fill="#d97706"/>
+  <!-- Vertical fin -->
+  <rect x="38" y="110" width="4" height="20" rx="1" fill="#92400e" opacity="0.8"/>
+</svg>

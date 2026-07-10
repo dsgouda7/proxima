@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 120">
+  <!-- Small general aviation / turboprop (top-down) e.g. Cessna, Pilatus -->
+  <!-- Fuselage -->
+  <ellipse cx="35" cy="62" rx="4" ry="50" fill="#15803d"/>
+  <!-- Straight wings (not swept) -->
+  <path d="M32,52 L2,56 L2,60 L32,57Z" fill="#16a34a"/>
+  <path d="M38,52 L68,56 L68,60 L38,57Z" fill="#16a34a"/>
+  <!-- Propeller -->
+  <ellipse cx="35" cy="16" rx="16" ry="3" fill="#166534" opacity="0.9"/>
+  <circle cx="35" cy="16" r="3" fill="#14532d"/>
+  <!-- Horizontal stabilizer (smaller, further back) -->
+  <path d="M30,95 L16,100 L16,103 L30,98Z" fill="#16a34a"/>
+  <path d="M40,95 L54,100 L54,103 L40,98Z" fill="#16a34a"/>
+  <!-- Cockpit -->
+  <ellipse cx="35" cy="26" rx="4" ry="5.5" fill="#86efac" opacity="0.5"/>
+</svg>
