@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Instant};
 use redis::AsyncCommands;
+use s2::{cellid::CellID, latlng::LatLng, s1};
 use crate::{GeoEntry, GeoTrie, Metrics, Result};
 
 /// Default safety-net TTL: 10 minutes.
@@ -202,6 +203,95 @@ impl RedisStore {
 
     pub fn metrics(&self) -> &Arc<Metrics> { &self.metrics }
 
+    /// Merge a batch of `GeoEntry` items into Redis using **freshness ordering**.
+    ///
+    /// Unlike [`persist_trie`] — which atomically replaces the entire active set —
+    /// `merge_entries` is an **additive, idempotent** upsert:
+    ///
+    /// - An entry is written only if `entry.written_at ≥ existing written_at`.
+    ///   A stale snapshot can never overwrite a live write.
+    /// - The `{prefix}:written_at` sorted set is kept consistent so subsequent
+    ///   [`entities_written_after`] delta-sync queries correctly reflect the merged state.
+    ///
+    /// ## Shard split seeding — canonical usage
+    ///
+    /// When a new shard boots from a snapshot (via `POST /ingest-snapshot`) and then
+    /// catches up via delta sync (`GET /delta-sync`), both paths call `merge_entries`.
+    /// Either call is safe to retry; the freshness check guarantees idempotency.
+    ///
+    /// ```text
+    /// Source shard                   New shard
+    /// ─────────────────────────────────────────
+    /// POST snapshot entries ────────► merge_entries(snapshot, s2_level)
+    /// POST delta entries    ────────► merge_entries(delta, s2_level)
+    ///                                (only newer entries are written)
+    /// ```
+    ///
+    /// ## Returns
+    /// The number of entries **actually written** (those that passed the freshness
+    /// check). Entries that were already up-to-date in Redis are skipped silently.
+    pub async fn merge_entries(&self, entries: &[GeoEntry], s2_level: u8) -> Result<usize> {
+        if entries.is_empty() { return Ok(0); }
+
+        let prefix         = &self.key_prefix;
+        let ttl            = self.entity_ttl_secs;
+        let written_at_key = format!("{prefix}:written_at");
+        let mut conn       = self.client.get_multiplexed_async_connection().await?;
+
+        // ── Batch-fetch existing written_at scores (one pipeline round-trip) ──
+        let mut score_pipe = redis::pipe();
+        for e in entries {
+            score_pipe.zscore(&written_at_key, e.id.as_str());
+        }
+        let existing: Vec<Option<f64>> = score_pipe.query_async(&mut conn).await?;
+
+        // ── Stamp missing written_at values ───────────────────────────────────
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // ── Keep only entries that are fresher than what's in Redis ───────────
+        let to_write: Vec<(GeoEntry, String)> = entries
+            .iter()
+            .zip(existing.iter())
+            .filter_map(|(entry, existing_score)| {
+                let existing_ts = existing_score.map(|s| s as u64).unwrap_or(0);
+                if entry.written_at >= existing_ts {
+                    let mut e = entry.clone();
+                    if e.written_at == 0 { e.written_at = now_ms; }
+                    let token = s2_cell_token(e.lat, e.lon, s2_level);
+                    Some((e, token))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let written = to_write.len();
+        if written == 0 { return Ok(0); }
+
+        // ── Write the fresh entries in chunked pipelines ──────────────────────
+        for chunk in to_write.chunks(CHUNK_SIZE) {
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            for (entry, token) in chunk {
+                let ak  = format!("{prefix}:entity:{}", entry.id);
+                let ck  = format!("{prefix}:cell:{token}");
+                let loc = format!("{prefix}:location:{}", entry.id);
+                let json = serde_json::to_string(entry)?;
+                pipe.set_ex(&ak,            &json,              ttl).ignore();
+                pipe.sadd(&ck,              &entry.id).ignore();
+                pipe.set_ex(&loc,           token,              ttl).ignore();
+                pipe.zadd(&written_at_key,  entry.written_at as f64, entry.id.as_str()).ignore();
+            }
+            pipe.query_async::<()>(&mut conn).await?;
+        }
+
+        tracing::debug!("merge_entries: wrote {}/{} entries", written, entries.len());
+        Ok(written)
+    }
+
     /// Returns all entities whose `written_at` timestamp is strictly greater
     /// than `since_ms` AND whose S2 cell token falls in `[prefix_start, prefix_end)`.
     ///
@@ -259,4 +349,16 @@ impl RedisStore {
 
         Ok(entries)
     }
+}
+
+// ── Private helpers ────────────────────────────────────────────────────────
+
+/// Compute the S2 cell token for a (lat, lon) at the given S2 level.
+/// Mirrors `GeoTrie::cell_token` so `merge_entries` can work without a trie.
+fn s2_cell_token(lat: f64, lon: f64, level: u8) -> String {
+    let ll   = LatLng::new(s1::Deg(lat).into(), s1::Deg(lon).into());
+    let cell = CellID::from(ll).parent(level as u64);
+    if cell.0 == 0 { return "X".into(); }
+    let hex  = format!("{:016x}", cell.0);
+    hex.trim_end_matches('0').to_string()
 }

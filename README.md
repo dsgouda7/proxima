@@ -65,9 +65,14 @@ A viewport query covering London computes the S2 tokens for that area (`487a`, `
 ### Redis data model
 
 ```
-georedis:aircraft:{id}   →  SET  {json}   EX 120     ← full entity payload
-georedis:cell:{token}    →  SADD {id...}  EXPIRE 120  ← spatial index
+georedis:entity:{id}     →  SET  {json}   EX ttl    ← full entity payload (includes written_at)
+georedis:cell:{token}    →  SADD {id...}  EXPIRE ttl ← spatial index
+georedis:location:{id}   →  SET  {token}  EX ttl    ← reverse lookup: id → cell token
+georedis:written_at      →  ZSET score=ms member=id  ← write-timestamp index for delta sync
 ```
+
+The `written_at` sorted set enables the shard split protocol (see below): a new shard
+can request all entities written after a given millisecond timestamp in O(log N + result size).
 
 ### Data flow
 
@@ -229,6 +234,52 @@ The split threshold and merge threshold are configurable per cluster (see `demo/
 
 No central coordinator. No Zookeeper. Routing table convergence in O(log N) gossip rounds.
 
+### Shard split protocol
+
+When a shard's key count exceeds `SPLIT_THRESHOLD_KEYS`, it performs a **snapshot-first split** — a durable, crash-safe migration that does not require the source to stay live for the duration:
+
+```
+Source shard                           New shard (Standby → Bootstrapping → Active)
+──────────────────────────────────────────────────────────────────────────────────────
+POST /split
+  ├─ mark Splitting
+  ├─ Phase 1: scan entities ≥ split_point (read-only, no mutations)
+  │
+  ├─ Phase 2 (per chunk):
+  │    POST /ingest-snapshot ─────────► 1. append to SQLite snapshot (durable)
+  │                                     2. store.merge_entries() → Redis
+  │    ◄──── 200 OK (both persisted) ──
+  │    delete from source Redis
+  │
+  ├─ mark Active (new prefix range)
+  │
+  └─ PUT /assign-range ───────────────► set Bootstrapping
+       (source_addr, snapshot_ts)        spawn bootstrap_delta_sync task:
+                                           GET /delta-sync?since_ms=T ──────►
+Source                                     store.merge_entries(delta)
+  ├─ /delta-sync uses                       (freshness check: skip if
+  │   entities_written_after()               incoming.written_at ≤ existing)
+  └─ returns Vec<GeoEntry> ─────────►    set Active
+                                         gossip to all peers
+```
+
+**Why snapshot-first matters:** if the new shard crashes mid-migration, it restarts and auto-restores from its SQLite snapshot — no operator intervention, no re-split. The `merge_entries` call is idempotent: re-running it after a crash writes only the entries that are still newer than what Redis holds.
+
+**Why `Bootstrapping` state matters:** a node in `Bootstrapping` refuses all writes with 503. This prevents a split-brain scenario where the new shard accepts writes before it has finished catching up, which would create entities with stale `written_at` that the freshness check would never overwrite.
+
+### Core library API for splits
+
+These are the stable lib-level primitives that the demo `geo-node` builds on:
+
+| Method | Description |
+|---|---|
+| `RedisStore::merge_entries(entries, s2_level)` | Additive, idempotent upsert with freshness ordering. The canonical primitive for seeding a new shard from a snapshot **and** for delta-sync catch-up. |
+| `RedisStore::entities_written_after(since_ms, prefix_start, prefix_end)` | Returns all entities whose `written_at > since_ms` within a prefix range. Powers the `/delta-sync` endpoint. O(log N + result). |
+| `GeoTrie::remove_range(start, end)` | Removes all entries whose S2 token falls in `[start, end)`. Called on the source shard after migration to stop holding data it no longer owns. |
+| `NodeStatus::Bootstrapping` | Cluster state: node is loading snapshot + performing delta catch-up. Refuses writes until it transitions to `Active`. |
+
+**`GeoEntry.written_at`** (Unix milliseconds, `u64`, `#[serde(default)]`) is set automatically by `persist_trie()` and `merge_entries()` when 0. It flows through snapshot serialisation and delta-sync responses unchanged, so freshness comparisons are meaningful across shard boundaries.
+
 ### Proving it's distributed
 
 ```bash
@@ -379,10 +430,12 @@ Tile38 is the closest competitor — a purpose-built real-time geo database. Key
 | `GET /health` | Health check |
 | `GET /metrics` | Key count, memory, status |
 | `GET /trace?lat=&lon=` | Prove which shard owns a coordinate |
+| `GET /delta-sync?since_ms=T` | Entities written after T ms in this shard's range (for bootstrapping catch-up) |
 | `POST /gossip` | Receive a gossip push, return own state |
-| `POST /split` | Migrate half the keys to a target node |
-| `POST /ingest` | Receive migrated `GeoEntry` batch |
-| `PUT /assign-range` | Accept a new prefix range (called by splitting node) |
+| `POST /split` | Migrate half the keys to a target node (snapshot-first) |
+| `POST /ingest` | Receive a `GeoEntry` batch (range-ownership enforced; 409 if out of range) |
+| `POST /ingest-snapshot` | Seed this shard from snapshot entries — writes to SQLite then calls `merge_entries()` |
+| `PUT /assign-range` | Accept a new prefix range; transitions to `Bootstrapping` and spawns delta-sync |
 
 ---
 
@@ -392,15 +445,16 @@ Tile38 is the closest competitor — a purpose-built real-time geo database. Key
 georedis/
 ├── lib/                   # Core Rust library (publish to crates.io)
 │   ├── src/
-│   │   ├── trie.rs        # S2-keyed trie — O(token_len) insert + lookup
-│   │   ├── store.rs       # Redis persistence — chunked pipelines, SUNION
+│   │   ├── trie.rs        # S2-keyed trie — O(token_len) insert + lookup + range-remove
+│   │   ├── store.rs       # Redis persistence — persist_trie, merge_entries, entities_written_after
 │   │   ├── metrics.rs     # Lock-free atomic latency counters
-│   │   └── cluster.rs     # ClusterRing, NodeInfo — routing data structures
+│   │   └── cluster.rs     # ClusterRing, NodeInfo, NodeStatus (incl. Bootstrapping)
 │   ├── tests/             # 22 integration tests
 │   └── benches/           # criterion benchmarks
 ├── demo/
 │   ├── server/            # Axum HTTP server + OpenSky poller (single-node demo)
-│   ├── geo-node/          # Distributed shard daemon with gossip + split
+│   ├── weather-server/    # Live METAR weather demo with event-streaming + S2 aggregation
+│   ├── geo-node/          # Distributed shard daemon — gossip, snapshot-split, delta-sync
 │   ├── loadtest/          # HDR-histogram load test (single + distributed mode)
 │   ├── docker-compose.yml # Single-node: Redis only
 │   └── cluster-compose.yml # 3-shard distributed cluster + standby

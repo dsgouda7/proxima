@@ -339,36 +339,18 @@ async fn restore_from_snapshot(
     }
 
     let n = valid.len();
-
     tracing::info!("Redis is empty — restoring {} entities from snapshot", n);
 
-    // Chunked pipeline restore (only non-expired entries)
-    write_entries_to_redis(state, &valid).await?;
+    // Convert SnapshotEntries → GeoEntries and use the lib's merge_entries
+    // so the written_at index is maintained on restore too.
+    let geo_entries: Vec<georedis::GeoEntry> = valid.iter()
+        .filter_map(|e| serde_json::from_str::<georedis::GeoEntry>(&e.json).ok())
+        .collect();
+    state.store.merge_entries(&geo_entries, state.cfg.s2_level).await
+        .map_err(|e| anyhow::anyhow!("Snapshot restore merge failed: {e}"))?;
 
     tracing::info!("Snapshot restore complete: {} entities loaded into Redis", n);
     Ok(true)
-}
-
-/// Write snapshot entries directly to Redis — used by both startup restore
-/// and the live migration path (`/ingest-snapshot`).
-async fn write_entries_to_redis(state: &AppState, entries: &[snapshot::SnapshotEntry]) -> anyhow::Result<()> {
-    use redis::AsyncCommands;
-    let mut conn = state.redis.get_multiplexed_async_connection().await?;
-    let ttl = state.cfg.entity_ttl_secs;
-    for chunk in entries.chunks(500) {
-        let mut pipe = redis::pipe();
-        pipe.atomic();
-        for e in chunk {
-            let ak  = format!("georedis:entity:{}", e.id);
-            let ck  = format!("georedis:cell:{}", e.token);
-            let loc = format!("georedis:location:{}", e.id);
-            pipe.set_ex(&ak,  &e.json,  ttl).ignore();
-            pipe.sadd(&ck,    &e.id).ignore();
-            pipe.set_ex(&loc, &e.token, ttl).ignore();
-        }
-        pipe.query_async::<()>(&mut conn).await?;
-    }
-    Ok(())
 }
 
 async fn gossip_loop(state: AppState) {
@@ -907,9 +889,14 @@ async fn route_ingest_snapshot(
         }
     }
 
-    // 2. Restore to Redis so the shard is immediately queryable
-    if let Err(e) = write_entries_to_redis(&s, &entries).await {
-        tracing::error!("Redis restore failed during split ingest: {e}");
+    // 2. Merge into Redis using the lib's freshness-ordered primitive.
+    //    This is the same path used for delta-sync catch-up — idempotent
+    //    and safe to retry.
+    let geo_entries: Vec<georedis::GeoEntry> = entries.iter()
+        .filter_map(|e| serde_json::from_str::<georedis::GeoEntry>(&e.json).ok())
+        .collect();
+    if let Err(e) = s.store.merge_entries(&geo_entries, s.cfg.s2_level).await {
+        tracing::error!("Redis merge failed during split ingest: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
@@ -1021,39 +1008,17 @@ async fn bootstrap_delta_sync(
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(mut delta) = resp.json::<Vec<GeoEntry>>().await {
                     tracing::info!("Bootstrap: received {} delta entries", delta.len());
-
-                    if let Ok(mut conn) = s.redis.get_multiplexed_async_connection().await {
-                        use redis::AsyncCommands;
-                        let ttl    = s.cfg.entity_ttl_secs as u64;
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default().as_millis() as u64;
-                        let wk = "georedis:written_at";
-
-                        for entry in &mut delta {
-                            if entry.written_at == 0 { entry.written_at = now_ms; }
-
-                            // Freshness check — only apply if incoming is newer.
-                            let existing: Option<String> = conn
-                                .get(format!("georedis:entity:{}", entry.id))
-                                .await.unwrap_or(None);
-                            let apply = match existing {
-                                None    => true,
-                                Some(j) => serde_json::from_str::<GeoEntry>(&j)
-                                    .map(|ex| entry.written_at > ex.written_at)
-                                    .unwrap_or(true),
-                            };
-                            if !apply { continue; }
-
-                            let tok  = cell_token(entry.lat, entry.lon, s.cfg.s2_level);
-                            let json = serde_json::to_string(entry).unwrap_or_default();
-                            let mut pipe = redis::pipe();
-                            pipe.set_ex(format!("georedis:entity:{}",   entry.id), &json, ttl).ignore()
-                                .sadd(format!("georedis:cell:{tok}"),  &entry.id).ignore()
-                                .set_ex(format!("georedis:location:{}", entry.id), &tok, ttl).ignore()
-                                .zadd(wk, entry.written_at as f64, entry.id.as_str()).ignore();
-                            let _: () = pipe.query_async(&mut conn).await.unwrap_or(());
-                        }
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default().as_millis() as u64;
+                    for e in &mut delta {
+                        if e.written_at == 0 { e.written_at = now_ms; }
+                    }
+                    // store.merge_entries applies the freshness check — only
+                    // entries newer than what's already in this shard are written.
+                    match s.store.merge_entries(&delta, s.cfg.s2_level).await {
+                        Ok(n) => tracing::info!("Bootstrap: applied {n}/{} delta entries", delta.len()),
+                        Err(e) => tracing::warn!("Bootstrap: merge_entries failed: {e}"),
                     }
                 }
             }
