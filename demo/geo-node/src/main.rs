@@ -61,6 +61,10 @@ struct Config {
     /// If non-empty, all write endpoints require `X-API-Key: <value>`.
     /// Leave empty in dev. Set via API_KEY env var in production.
     api_key:          String,
+    /// Redis key namespace prefix. Defaults to "proxima".
+    /// Override via KEY_NAMESPACE env var for multi-tenant isolation
+    /// (multiple logical datasets on the same Redis instance).
+    key_namespace:    String,
     /// Port for the gRPC server. Defaults to http_port + 10.
     grpc_port:        u16,
 }
@@ -90,6 +94,7 @@ impl Config {
             snapshot_path:          env("SNAPSHOT_PATH", ""),
             snapshot_interval_secs: env_parse("SNAPSHOT_INTERVAL_SECS", 300u64),
             entity_ttl_secs:        env_parse("ENTITY_TTL_SECS",        120u64),            api_key:            env("API_KEY",                       ""),
+            key_namespace:      env("KEY_NAMESPACE",              "proxima"),
             grpc_port:          env_parse("GRPC_PORT",               port + 10),        }
     }
 }
@@ -149,7 +154,8 @@ impl AppState {
                 cfg.redis_url.as_str(),
                 Metrics::new(),
                 cfg.entity_ttl_secs,
-            ).expect("RedisStore init"),
+            ).expect("RedisStore init")
+            .with_namespace(&cfg.key_namespace),
         );
         Ok(Self {
             cfg,

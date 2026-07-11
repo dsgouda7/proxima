@@ -1,12 +1,16 @@
 # ── Shard 0 — Americas ──────────────────────────────────────────────────────
 # Covers S2 prefix range ["", "5") — North + South America, West Africa
-# Redis runs as a sidecar in the same pod for sub-millisecond local latency.
-# For production HA, replace with REDIS_URL pointing to Azure Cache / ElastiCache.
+#
+# Redis configuration (choose one — see secrets-template.yaml):
+#   Mode A — Sidecar (default): Redis runs in the same pod, loopback <0.1ms.
+#             No external credentials needed. Good for dev and single-region.
+#   Mode B — Managed Redis: remove the redis sidecar container below and
+#             uncomment the secretKeyRef blocks for REDIS_URL and API_KEY.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: geo-node-0
-  namespace: georedis
+  namespace: proxima
   labels: { app: geo-node, shard: "0", region: americas }
 spec:
   replicas: 1
@@ -34,7 +38,7 @@ spec:
 
         # geo-node — S2 trie shard daemon
         - name: geo-node
-          image: georedis-geo-node:latest
+          image: proxima-geo-node:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 4000
@@ -43,21 +47,41 @@ spec:
             - { name: NODE_ID,      value: "node-0" }
             - { name: NODE_ADDR,    value: "geo-node-0:4000" }
             - { name: HTTP_PORT,    value: "4000" }
-            # localhost = Redis sidecar in same pod
-            - { name: REDIS_URL,    value: "redis://localhost:6379" }
-            - { name: PREFIX_START, valueFrom: { configMapKeyRef: { name: georedis-ring, key: GEO_NODE_0_PREFIX_START } } }
-            - { name: PREFIX_END,   valueFrom: { configMapKeyRef: { name: georedis-ring, key: GEO_NODE_0_PREFIX_END   } } }
+
+            # ── Redis connection ─────────────────────────────────────────
+            # Mode A — Sidecar (default). Keep the redis container above.
+            - { name: REDIS_URL, value: "redis://localhost:6379" }
+
+            # Mode B — Managed Redis (Azure Cache / ElastiCache / Redis Cloud).
+            # 1. Remove the redis sidecar container block above.
+            # 2. Run: kubectl apply -f demo/k8s/secrets.yaml  (your filled secrets)
+            # 3. Comment out Mode A above and uncomment Mode B below:
+            # - name: REDIS_URL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: proxima-redis-shard-0
+            #       key: REDIS_URL
+
+            # ── Write-endpoint auth (optional) ────────────────────────
+            # Uncomment to require X-API-Key on all write endpoints:
+            # - name: API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: proxima-redis-shard-0
+            #       key: API_KEY
+
+            - { name: PREFIX_START, valueFrom: { configMapKeyRef: { name: proxima-ring, key: GEO_NODE_0_PREFIX_START } } }
+            - { name: PREFIX_END,   valueFrom: { configMapKeyRef: { name: proxima-ring, key: GEO_NODE_0_PREFIX_END   } } }
             - { name: SEED_PEERS,   value: "geo-node-1:4001,geo-node-2:4002" }
-            - { name: S2_LEVEL,     valueFrom: { configMapKeyRef: { name: georedis-ring, key: S2_LEVEL } } }
-            # Thresholds — tune per environment
-            - { name: SPLIT_THRESHOLD_KEYS,       valueFrom: { configMapKeyRef: { name: georedis-ring, key: SPLIT_THRESHOLD_KEYS,      optional: "true" } } }
-            - { name: SPLIT_THRESHOLD_WRITE_QPS,  valueFrom: { configMapKeyRef: { name: georedis-ring, key: SPLIT_THRESHOLD_WRITE_QPS, optional: "true" } } }
-            - { name: MERGE_THRESHOLD_KEYS,       valueFrom: { configMapKeyRef: { name: georedis-ring, key: MERGE_THRESHOLD_KEYS,      optional: "true" } } }
-            - { name: SUSPECT_SECS,               valueFrom: { configMapKeyRef: { name: georedis-ring, key: SUSPECT_SECS,              optional: "true" } } }
-            - { name: DEAD_SECS,                  valueFrom: { configMapKeyRef: { name: georedis-ring, key: DEAD_SECS,                 optional: "true" } } }
+            - { name: S2_LEVEL,     valueFrom: { configMapKeyRef: { name: proxima-ring, key: S2_LEVEL } } }
+            - { name: SPLIT_THRESHOLD_KEYS,       valueFrom: { configMapKeyRef: { name: proxima-ring, key: SPLIT_THRESHOLD_KEYS,      optional: "true" } } }
+            - { name: SPLIT_THRESHOLD_WRITE_QPS,  valueFrom: { configMapKeyRef: { name: proxima-ring, key: SPLIT_THRESHOLD_WRITE_QPS, optional: "true" } } }
+            - { name: MERGE_THRESHOLD_KEYS,       valueFrom: { configMapKeyRef: { name: proxima-ring, key: MERGE_THRESHOLD_KEYS,      optional: "true" } } }
+            - { name: SUSPECT_SECS,               valueFrom: { configMapKeyRef: { name: proxima-ring, key: SUSPECT_SECS,              optional: "true" } } }
+            - { name: DEAD_SECS,                  valueFrom: { configMapKeyRef: { name: proxima-ring, key: DEAD_SECS,                 optional: "true" } } }
             - { name: SNAPSHOT_PATH,              value: "/data/snapshot.db" }
-            - { name: SNAPSHOT_INTERVAL_SECS,     valueFrom: { configMapKeyRef: { name: georedis-ring, key: SNAPSHOT_INTERVAL_SECS, optional: "true" } } }
-            - { name: ENTITY_TTL_SECS,            valueFrom: { configMapKeyRef: { name: georedis-ring, key: ENTITY_TTL_SECS,        optional: "true" } } }
+            - { name: SNAPSHOT_INTERVAL_SECS,     valueFrom: { configMapKeyRef: { name: proxima-ring, key: SNAPSHOT_INTERVAL_SECS, optional: "true" } } }
+            - { name: ENTITY_TTL_SECS,            valueFrom: { configMapKeyRef: { name: proxima-ring, key: ENTITY_TTL_SECS,        optional: "true" } } }
             - { name: RUST_LOG,     value: "info" }
           resources:
             requests: { memory: "128Mi", cpu: "100m" }
@@ -81,7 +105,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: geo-node-0
-  namespace: georedis
+  namespace: proxima
 spec:
   selector: { app: geo-node, shard: "0" }
   ports:
