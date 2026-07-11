@@ -77,6 +77,18 @@ impl RedisStore {
         })
     }
 
+    /// Override the Redis key namespace (default: `"georedis"`).
+    ///
+    /// Multiple logical tenants can share one Redis instance without key
+    /// collisions by using distinct namespaces:
+    /// ```ignore
+    /// let store = RedisStore::new(url, metrics)?.with_namespace("acme");
+    /// ```
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.key_prefix = namespace.into();
+        self
+    }
+
     /// Persists all trie entries to Redis.
     ///
     /// **Uniqueness guarantee**: every entity ID exists in exactly ONE cell at
@@ -199,6 +211,62 @@ impl RedisStore {
         tracing::debug!("Queried {} tokens → {} entries in {}µs",
             tokens.len(), entries.len(), start.elapsed().as_micros());
         Ok(entries)
+    }
+
+    /// Removes entries from the `written_at` sorted set whose backing entity
+    /// key has already expired in Redis.
+    ///
+    /// Call this periodically (e.g. every `entity_ttl_secs`) to prevent the
+    /// ZSET from growing unboundedly in long-running deployments.  The scan
+    /// uses `ZSCAN` in 200-member batches so it never blocks Redis for long.
+    ///
+    /// Returns the number of stale entries removed.
+    pub async fn prune_written_at(&self) -> Result<usize> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let prefix   = &self.key_prefix;
+        let wk       = format!("{prefix}:written_at");
+        let mut stale_total = 0usize;
+        let mut cursor      = 0u64;
+
+        loop {
+            // ZSCAN returns [member, score, member, score, ...]
+            let (new_cursor, pairs): (u64, Vec<String>) = redis::cmd("ZSCAN")
+                .arg(&wk)
+                .arg(cursor)
+                .arg("COUNT").arg(200u64)
+                .query_async(&mut conn).await?;
+
+            let members: Vec<String> = pairs.into_iter().step_by(2).collect();
+
+            if !members.is_empty() {
+                let mut pipe = redis::pipe();
+                for id in &members {
+                    pipe.exists(format!("{prefix}:entity:{id}"));
+                }
+                let alive: Vec<bool> = pipe.query_async(&mut conn).await?;
+
+                let stale: Vec<&str> = members.iter().zip(alive.iter())
+                    .filter(|(_, &a)| !a)
+                    .map(|(id, _)| id.as_str())
+                    .collect();
+
+                if !stale.is_empty() {
+                    stale_total += stale.len();
+                    let mut cmd = redis::cmd("ZREM");
+                    cmd.arg(&wk);
+                    for s in &stale { cmd.arg(s); }
+                    cmd.query_async::<i64>(&mut conn).await?;
+                }
+            }
+
+            cursor = new_cursor;
+            if cursor == 0 { break; }
+        }
+
+        if stale_total > 0 {
+            tracing::info!("prune_written_at: removed {} stale entries", stale_total);
+        }
+        Ok(stale_total)
     }
 
     pub fn metrics(&self) -> &Arc<Metrics> { &self.metrics }

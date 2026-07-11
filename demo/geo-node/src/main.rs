@@ -213,6 +213,10 @@ async fn main() -> Result<()> {
         tokio::spawn(async move { snapshot_loop(snap_state).await });
     }
 
+    // written_at ZSET pruning loop — cleans up scores for expired entity keys
+    let prune_state = state.clone();
+    tokio::spawn(async move { prune_loop(prune_state).await });
+
     // ── gRPC server (dedicated port = http_port + 10) ─────────────────────
     {
         let grpc_state = state.clone();
@@ -239,6 +243,7 @@ async fn main() -> Result<()> {
         .route("/cluster",       get(route_get_cluster))
         .route("/health",        get(route_health))
         .route("/gossip",        post(route_receive_gossip))
+        .route("/probe",         post(route_probe))
         .route("/metrics",       get(route_metrics))
         .route("/metrics/prom",  get(route_metrics_prometheus))
         .route("/trace",         get(route_trace))
@@ -253,6 +258,24 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// ── written_at prune loop ─────────────────────────────────────────────────
+
+/// Periodically removes entries from the `written_at` sorted set whose
+/// entity keys have expired in Redis.  Prevents unbounded ZSET growth.
+async fn prune_loop(state: AppState) {
+    // Wait two full TTL cycles on startup so we don't race with initial ingest.
+    let interval = Duration::from_secs(state.cfg.entity_ttl_secs * 2);
+    tokio::time::sleep(interval).await;
+    loop {
+        match state.store.prune_written_at().await {
+            Ok(n) if n > 0 => tracing::info!("prune_written_at: removed {} stale entries", n),
+            Ok(_)  => {}
+            Err(e) => tracing::warn!("prune_written_at failed: {e}"),
+        }
+        tokio::time::sleep(interval).await;
+    }
 }
 
 // ── Snapshot loop ──────────────────────────────────────────────────────────
@@ -399,23 +422,71 @@ async fn gossip_loop(state: AppState) {
                     }
                 }
                 Err(_) => {
-                    let mut ring = state.ring.write().await;
+                    // ── SWIM indirect ping ────────────────────────────────
+                    // Direct gossip failed.  Before escalating to Suspect/Dead,
+                    // ask up to 2 other Active nodes to probe the target.
+                    // Only escalate if the indirect probes ALSO fail — this
+                    // prevents false positives from transient one-hop drops.
                     let now = unix_now();
-                    for n in ring.all_nodes().cloned().collect::<Vec<_>>() {
-                        if n.addr == peer {
-                            let age = now.saturating_sub(n.last_seen_secs);
-                            if age > dead_secs && n.status != NodeStatus::Dead {
-                                let mut dead = n.clone();
-                                dead.status     = NodeStatus::Dead;
-                                dead.generation += 1;
-                                tracing::warn!("Node {} marked DEAD (unreachable {}s)", n.node_id, age);
-                                ring.merge(dead);
-                            } else if age > suspect_secs && n.status == NodeStatus::Active {
-                                let mut suspect = n.clone();
-                                suspect.status     = NodeStatus::Suspect;
-                                suspect.generation += 1;
-                                tracing::warn!("Node {} marked SUSPECT (unreachable {}s)", n.node_id, age);
-                                ring.merge(suspect);
+
+                    let probers: Vec<String> = {
+                        let ring = state.ring.read().await;
+                        ring.all_nodes()
+                            .filter(|n| n.addr != peer
+                                     && n.node_id != my_info.node_id
+                                     && n.status == NodeStatus::Active)
+                            .map(|n| n.addr.clone())
+                            .take(2)
+                            .collect()
+                    };
+
+                    let mut reachable_via_proxy = false;
+                    for prober in &probers {
+                        if let Ok(resp) = state.http
+                            .post(format!("http://{prober}/probe"))
+                            .json(&serde_json::json!({ "target": peer }))
+                            .timeout(Duration::from_secs(2))
+                            .send().await
+                        {
+                            if resp.json::<bool>().await.unwrap_or(false) {
+                                reachable_via_proxy = true;
+                                tracing::debug!(
+                                    "Indirect probe: {} is reachable via {}",
+                                    peer, prober
+                                );
+                                break;
+                            }
+                        }
+                    }
+
+                    if reachable_via_proxy {
+                        // Peer reachable via proxy — likely a one-hop network
+                        // blip, not a real failure.  Do not escalate this cycle.
+                    } else {
+                        // Neither direct nor indirect ping succeeded.
+                        let mut ring = state.ring.write().await;
+                        for n in ring.all_nodes().cloned().collect::<Vec<_>>() {
+                            if n.addr == peer {
+                                let age = now.saturating_sub(n.last_seen_secs);
+                                if age > dead_secs && n.status != NodeStatus::Dead {
+                                    let mut dead = n.clone();
+                                    dead.status     = NodeStatus::Dead;
+                                    dead.generation += 1;
+                                    tracing::warn!(
+                                        "Node {} marked DEAD ({}s, direct+indirect probes failed)",
+                                        n.node_id, age
+                                    );
+                                    ring.merge(dead);
+                                } else if age > suspect_secs && n.status == NodeStatus::Active {
+                                    let mut suspect = n.clone();
+                                    suspect.status     = NodeStatus::Suspect;
+                                    suspect.generation += 1;
+                                    tracing::warn!(
+                                        "Node {} marked SUSPECT ({}s, direct+indirect probes failed)",
+                                        n.node_id, age
+                                    );
+                                    ring.merge(suspect);
+                                }
                             }
                         }
                     }
@@ -507,6 +578,32 @@ async fn route_receive_gossip(
 ) -> Json<NodeInfo> {
     s.ring.write().await.merge(node);
     Json(s.my_info.read().await.clone())
+}
+
+// ── SWIM indirect probe ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ProbeRequest {
+    /// HTTP addr (host:port) of the node to health-check on behalf of the caller.
+    target: String,
+}
+
+/// POST /probe  — SWIM indirect ping relay.
+///
+/// When a node fails its direct gossip to peer P it asks other nodes to probe P.
+/// Returns `true` if this node can reach P, `false` otherwise.
+/// No state is mutated — purely a reachability test for the caller.
+async fn route_probe(
+    State(s):  State<AppState>,
+    Json(req): Json<ProbeRequest>,
+) -> Json<bool> {
+    let reachable = s.http
+        .get(format!("http://{}/health", req.target))
+        .timeout(Duration::from_secs(2))
+        .send().await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    Json(reachable)
 }
 
 // ── Split ──────────────────────────────────────────────────────────────────
@@ -1054,6 +1151,14 @@ async fn route_assign_range(
     // This is called by the absorbing node after a successful merge.
     if req.prefix_start.is_empty() && req.prefix_end.is_empty() {
         info!("Releasing range — transitioning to Standby");
+        // Release the range claim lock if we held one.
+        if let Ok(mut conn) = s.redis.get_multiplexed_async_connection().await {
+            let old_start = s.my_info.read().await.prefix_start.clone();
+            if !old_start.is_empty() {
+                let lock_key = format!("georedis:range_claim:{old_start}");
+                let _: () = conn.del(&lock_key).await.unwrap_or(());
+            }
+        }
         let mut my = s.my_info.write().await;
         my.prefix_start = String::new();
         my.prefix_end   = String::new();
@@ -1061,6 +1166,43 @@ async fn route_assign_range(
         my.generation  += 1;
         s.ring.write().await.merge(my.clone());
         return StatusCode::OK;
+    }
+
+    // ── Range claim CAS (split-brain guard) ───────────────────────────────
+    // Use Redis SET NX EX to atomically claim this prefix range.  If another
+    // node has already claimed the same prefix_start (e.g. due to a split
+    // retry or network partition), return 409 so the orchestrator can retry
+    // with the correct target.  The lock TTL (120 s) ensures it auto-releases
+    // if this node crashes before transitioning to Active.
+    {
+        let lock_key = format!("georedis:range_claim:{}", req.prefix_start);
+        let node_id  = s.cfg.node_id.clone();
+        match s.redis.get_multiplexed_async_connection().await {
+            Ok(mut conn) => {
+                let result: Option<String> = redis::cmd("SET")
+                    .arg(&lock_key)
+                    .arg(&node_id)
+                    .arg("NX")
+                    .arg("EX")
+                    .arg(120u64)
+                    .query_async(&mut conn).await
+                    .unwrap_or(None);
+                if result.is_none() {
+                    // Lock exists — check whether this node already holds it
+                    // (idempotent retry is fine; foreign holder is a conflict).
+                    let holder: String = conn.get(&lock_key).await.unwrap_or_default();
+                    if holder != node_id {
+                        tracing::warn!(
+                            "Range claim conflict: prefix {} already claimed by {}",
+                            req.prefix_start, holder
+                        );
+                        return StatusCode::CONFLICT;
+                    }
+                    // This node already holds the claim — idempotent, continue.
+                }
+            }
+            Err(e) => tracing::warn!("Redis unavailable for range claim CAS: {e}"),
+        }
     }
 
     info!(
@@ -1132,6 +1274,14 @@ async fn bootstrap_delta_sync(
     my.generation += 1;
     s.ring.write().await.merge(my.clone());
     info!("Bootstrap complete — node [{}, {}) is Active", prefix_start, prefix_end);
+
+    // Release the range-claim lock now that we are Active — the lock's purpose
+    // was to prevent a second node from stealing the same range during bootstrap.
+    // (The 120 s TTL is just the safety-net if we crash before reaching here.)
+    if let Ok(mut conn) = s.redis.get_multiplexed_async_connection().await {
+        let lock_key = format!("georedis:range_claim:{prefix_start}");
+        let _: () = conn.del(&lock_key).await.unwrap_or(());
+    }
 }
 
 // ── Cross-shard entity cleanup ─────────────────────────────────────────────
