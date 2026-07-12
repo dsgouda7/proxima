@@ -90,7 +90,7 @@ fn random_coord(rng: &mut impl Rng) -> (f64, f64) {
     )
 }
 
-/// Delete all keys matching `{namespace}:*` in Redis.
+/// Delete all keys matching the store's `{namespace}:*` hash-tagged keyspace.
 async fn cleanup(client: &redis::Client, namespace: &str) -> Result<()> {
     let mut conn = client.get_multiplexed_async_connection().await?;
     let mut cursor = 0u64;
@@ -98,7 +98,7 @@ async fn cleanup(client: &redis::Client, namespace: &str) -> Result<()> {
         let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
-            .arg(format!("{namespace}:*"))
+            .arg(format!("{{{namespace}}}:*"))
             .arg("COUNT")
             .arg(500u64)
             .query_async(&mut conn)
@@ -213,45 +213,50 @@ async fn exp2_read_latency(client: &redis::Client, args: &Args) -> Result<()> {
 
     // Seed 5000 entities so reads have something to return
     println!("  Seeding 5000 entities...");
-    for batch in 0..50 {
-        let mut trie = GeoTrie::new(9);
-        for i in 0..100 {
-            let (lat, lon) = random_coord(&mut rng);
-            trie.insert(mk_entry(&format!("s{batch}-{i}"), lat, lon));
-        }
-        store.persist_trie(&trie).await?;
+    let mut seed_trie = GeoTrie::new(9);
+    let mut occupied_tokens = Vec::with_capacity(5_000);
+    for index in 0..5_000 {
+        let (lat, lon) = random_coord(&mut rng);
+        occupied_tokens.push(seed_trie.cell_token(lat, lon));
+        seed_trie.insert(mk_entry(&format!("s{index}"), lat, lon));
     }
+    store.persist_trie(&seed_trie).await?;
 
     // Build token sets at different zoom levels
     let mut hist_small = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?; // 1–4 tokens
     let mut hist_medium = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?; // 5–20 tokens
     let mut hist_large = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?; // 21+ tokens
 
-    let helper_trie = GeoTrie::new(9);
     for _ in 0..args.queries {
-        let (lat, lon) = random_coord(&mut rng);
-        let token = helper_trie.cell_token(lat, lon);
+        let token = occupied_tokens[rng.gen_range(0..occupied_tokens.len())].clone();
 
-        // Generate token neighbourhoods of different sizes
-        let small_tokens: Vec<String> = vec![token.clone()];
-        let medium_tokens: Vec<String> = (0..8)
-            .map(|i| format!("{}{:x}", &token[..token.len().saturating_sub(1)], i))
-            .collect();
-        let large_tokens: Vec<String> = (0..32)
-            .map(|i| format!("{}{:x}", &token[..token.len().saturating_sub(2)], i))
-            .collect();
+        // Every query includes an occupied cell, so measurements include
+        // entity payload retrieval instead of measuring only empty unions.
+        let small_tokens = vec![token.clone()];
+        let medium_tokens = std::iter::once(token.clone())
+            .chain(
+                (0..7)
+                    .map(|index| format!("{}{:x}", &token[..token.len().saturating_sub(1)], index)),
+            )
+            .collect::<Vec<_>>();
+        let large_tokens = std::iter::once(token.clone())
+            .chain(
+                (0..31)
+                    .map(|index| format!("{}{:x}", &token[..token.len().saturating_sub(2)], index)),
+            )
+            .collect::<Vec<_>>();
 
-        let t = Instant::now();
+        let start = Instant::now();
         store.query_region(&small_tokens).await?;
-        hist_small.record(t.elapsed().as_micros() as u64)?;
+        hist_small.record(start.elapsed().as_micros() as u64)?;
 
-        let t = Instant::now();
+        let start = Instant::now();
         store.query_region(&medium_tokens).await?;
-        hist_medium.record(t.elapsed().as_micros() as u64)?;
+        hist_medium.record(start.elapsed().as_micros() as u64)?;
 
-        let t = Instant::now();
+        let start = Instant::now();
         store.query_region(&large_tokens).await?;
-        hist_large.record(t.elapsed().as_micros() as u64)?;
+        hist_large.record(start.elapsed().as_micros() as u64)?;
     }
 
     header_row();
@@ -427,7 +432,7 @@ async fn exp4_zset_drift(client: &redis::Client, args: &Args) -> Result<()> {
 
     // Measure ZSET size immediately after write
     let mut conn = client.get_multiplexed_async_connection().await?;
-    let zset_key = format!("{namespace}:written_at");
+    let zset_key = store.k_written_at();
     let zset_before: u64 = conn.zcard(&zset_key).await.unwrap_or(0);
     let entity_before: u64 = redis::cmd("DBSIZE")
         .query_async(&mut conn)
@@ -514,27 +519,25 @@ async fn exp5_memory(client: &redis::Client, args: &Args) -> Result<()> {
     let n: usize = 5_000;
     println!("  Writing {} entities...", n);
     let mut rng = StdRng::seed_from_u64(42);
-    for batch in 0..(n / 100) {
-        let mut trie = GeoTrie::new(9);
-        for i in 0..100 {
-            let (lat, lon) = random_coord(&mut rng);
-            // Payload size ~80 bytes to simulate real aircraft data
-            trie.insert(GeoEntry {
-                id: format!("mem-{}-{}", batch, i),
-                lat,
-                lon,
-                payload: json!({
-                    "callsign": format!("FLT{:04}", batch * 100 + i),
-                    "altitude": 35000,
-                    "speed":    480,
-                    "heading":  270,
-                    "squawk":   "7700",
-                }),
-                written_at: 0,
-            });
-        }
-        store.persist_trie(&trie).await?;
+    let mut trie = GeoTrie::new(9);
+    for index in 0..n {
+        let (lat, lon) = random_coord(&mut rng);
+        // Payload size ~80 bytes to simulate real aircraft data.
+        trie.insert(GeoEntry {
+            id: format!("mem-{index}"),
+            lat,
+            lon,
+            payload: json!({
+                "callsign": format!("FLT{index:04}"),
+                "altitude": 35000,
+                "speed":    480,
+                "heading":  270,
+                "squawk":   "7700",
+            }),
+            written_at: 0,
+        });
     }
+    store.persist_trie(&trie).await?;
 
     let mem_after: u64 = {
         let info: String = redis::cmd("INFO")

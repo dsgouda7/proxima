@@ -1,6 +1,6 @@
 # proxima
 
-**A distributed geospatial cache that answers "what's near me?" in under 1 ms across millions of moving objects — aircraft, couriers, IoT devices — backed by any managed Redis instance.**
+**A distributed geospatial cache for moving objects such as aircraft, couriers, and IoT devices, backed by Redis.**
 
 Shards can be split online as load grows through an authenticated operator API. Each shard is a stateless Rust service pointed at its own Redis — run it as a Docker sidecar, a K8s pod, or against Azure Cache / ElastiCache in any region. Distributed split and merge additionally require a managed, quorum-backed etcd v3 cluster configured with `METADATA_ETCD_ENDPOINTS`.
 
@@ -12,21 +12,39 @@ Shards can be split online as load grows through an authenticated operator API. 
 
 ---
 
-## By the numbers
+## Benchmark Coverage
 
-> Measured on an Apple M2 Pro (10-core) running Docker Desktop 4.x, Redis 7 in a single local container, no network hop between the Rust process and Redis (Unix-socket equivalent loopback). Payload: 80-byte JSON per entity. Concurrency: single-threaded benchmark harness (criterion 0.5). End-to-end HTTP latency is not included — these are library-level timings. See [TECHNICAL.md](TECHNICAL.md) §8 for full methodology and reproduction steps.
+The latest Redis-backed measurement was run on 2026-07-11 against Redis 7.4.9
+in Docker Desktop on Windows 11, using loopback Redis database 15. It is a
+direct library-to-Redis measurement, not an HTTP, geo-node, Kubernetes, or
+managed-Redis benchmark.
 
-> Run yourself: `scripts/run-experiments.ps1`
-
-| What | Measured | Notes |
+| Workload | Result | Scope |
 |---|---|---|
-| Read latency ("what's near me?") | **683 µs p50 / 933 µs p99** | 5,000 seeded entities, local Redis |
-| Viewport size scaling | **+14 µs** from 1 to 32 S2 cells | S2 trie touches only relevant cells |
-| Write latency (batch) | **2.95 ms p50 per 100-entity batch** | ~30 µs/entity when pipelined |
-| Storage per entity | **~976 B · 3 Redis keys** | ~80 B JSON payload |
-| Entities per GB of Redis | **~1 million** | Linear with payload size |
-| Shard split catch-up miss | **0.5%** (192/193 writes) | `entities_written_after` completeness |
-| ZSET housekeeping accuracy | **100%** stale entries pruned | `prune_written_at()` |
+| `persist_trie`, 100-entry snapshot | 4.19 ms p50; 7.17 ms p99 | 200 sequential writes |
+| `query_region`, occupied cell | 1.14 ms p50; 1.89 ms p99 | 5,000-entry snapshot; 500 calls |
+| `query_region`, 32-token set | 1.15 ms p50; 2.09 ms p99 | Includes one occupied token; 500 calls |
+| `insert_10k` Criterion | 13.176 ms estimate | In-process; 100 samples; no Redis or HTTP |
+| `query_token` Criterion | 94.783 ns estimate | In-process; 100 samples; no Redis or HTTP |
+| `prune_written_at` | 300 of 300 stale entries removed | 3 s entity TTL, then 4 s wait |
+| Redis memory | 1,076 B/entity; 3.00 keys/entity | 5,000-entry snapshot; workload-specific |
+
+The split probe captured 200 of 201 writes (99.5%) at an achieved 67 writes/s,
+despite a target of 300 writes/s. It is not evidence of zero-loss split
+behavior. Full environment details, raw-output location, and limitations are
+in [TECHNICAL.md](TECHNICAL.md).
+
+current Criterion suite measures only in-process trie operations:
+
+| Benchmark | Workload |
+|---|---|
+| `insert_10k` | Insert 10,000 entries into a fresh `GeoTrie` |
+| `query_token` | Query one S2 token in a 10,000-entry trie |
+
+Run the available micro-benchmarks with `cargo bench -p proxima`. Redis-backed
+measurements require a running Redis instance and the experimental harness:
+`scripts/run-experiments.ps1`. Do not compare runs across machines, Redis
+topologies, or payload distributions without recording those inputs.
 
 ---
 
@@ -38,7 +56,7 @@ sequenceDiagram
     participant SQLite as SQLite (crash-recovery snapshot)
 
     App->>Node: POST /ingest [{id, lat, lon, payload}]
-    Node->>Node: compute S2 token in 68 ns
+    Node->>Node: compute S2 token
     Node->>Redis: SET proxima:entity:{id} EX 120
     Node->>Redis: SADD proxima:cell:{token} {id}
     Node->>Redis: ZADD proxima:written_at {now_ms} {id}
@@ -50,7 +68,7 @@ sequenceDiagram
     Redis-->>Node: 47 entity IDs
     Node->>Redis: Pipeline GET × 47
     Redis-->>Node: 47 JSON payloads
-    Node-->>App: [{id, lat, lon, payload}] in <1 ms
+    Node-->>App: [{id, lat, lon, payload}]
 ```
 
 ---
@@ -108,7 +126,7 @@ Shard 0 (Americas)          Shard 1 (Europe)            Shard 2 (Pacific)
 ```
 
 - **Docker** (`demo/cluster-compose.yml`): each geo-node has a dedicated `redis:7-alpine` sidecar container
-- **Kubernetes** (`demo/k8s/`): Redis runs as a sidecar in each shard pod — loopback latency <0.1 ms
+- **Kubernetes** (`demo/k8s/`): Redis runs as a sidecar in each shard pod
 - **Production**: set `REDIS_URL=rediss://...` per shard to a managed instance (Azure Cache for Redis, AWS ElastiCache, Redis Cloud) in the same datacenter region as the geo-node
 
 ### Data flow
@@ -121,8 +139,8 @@ flowchart LR
     end
     subgraph proxima
         Poller["Poller\nevery 30s"]
-        Trie["In-Memory S2 Trie\n68 ns/query"]
-        Store["RedisStore\n<1 ms reads"]
+        Trie["In-Memory S2 Trie"]
+        Store["RedisStore"]
         DB["SQLite\ncrash-recovery snapshot"]
     end
     subgraph Clients
@@ -356,22 +374,17 @@ kubectl exec -n proxima deploy/geo-node-1 -- \
        -d '{"target":"geo-node-3:4003","split_point":"7"}'
 ```
 
-Each pod runs **Redis as a sidecar container** — loopback latency (<0.1ms) vs cross-pod (~1ms). Replace with `REDIS_URL` pointing to Azure Cache / ElastiCache for managed HA.
+Each pod runs Redis as a sidecar container. Replace it with `REDIS_URL` pointing to Azure Cache / ElastiCache for managed HA.
 
 ---
 
 ## Benchmarks
 
-> Controlled experiments run against a local Docker Redis. Full methodology in [TECHNICAL.md](TECHNICAL.md) §8.
-
-| Operation | p50 | p99 | Notes |
-|---|---|---|---|
-| Read — 1 S2 token viewport | **683 µs** | 933 µs | 5k seeded entities |
-| Read — 8 S2 token viewport | **685 µs** | 986 µs | city-scale |
-| Read — 32 S2 token viewport | **697 µs** | 960 µs | country-scale |
-| Write — `persist_trie` (100 entities) | **2.95 ms** | 11.63 ms | ~30 µs/entity batched |
-| Trie insert (in-process) | **1.04 µs** | — | no I/O |
-| Trie lookup (in-process) | **68 ns** | — | O(token_len) |
+No Redis or HTTP latency figures are currently published. The only checked-in
+benchmarks are the in-process Criterion workloads described in
+[Benchmark coverage](#benchmark-coverage). Record the CPU, operating system,
+Redis version and topology, payload shape, concurrency, warm-up, and raw
+Criterion output before publishing a result.
 
 ```bash
 # Reproduce all 5 experiments
@@ -389,18 +402,15 @@ Every other option in this space makes a write-frequency tradeoff that breaks do
 
 ```
 Traditional spatial DB:  optimised for complex queries on stable data
-proxima:                 <1 ms reads/writes, millions of moving entities,
-                         backed by any managed Redis, shards without downtime
+proxima:                 optimised for moving entities, backed by Redis,
+                         with operator-driven geographic shard changes
 ```
 
 ### Detailed comparison
 
 | | **proxima** | Redis GEO | PostGIS | Elasticsearch | Tile38 |
 |---|---|---|---|---|---|
-| **Read latency** | **<1 ms** (measured) | 10–50 ms | 5–30 ms | 10–50 ms | 5–20 ms |
-| **Write latency/entity** | **~30 µs** batched | <1 ms | 5–50 ms | 200–800 ms | <1 ms |
-| **Storage/entity** | **~1 KB** | ~60 B | ~200 B | ~500 B | ~200 B |
-| **Entities per GB** | **~1 M** | ~16 M | ~5 M | ~2 M | ~5 M |
+| **Published workload benchmark** | Not yet published | Varies by deployment | Varies by deployment | Varies by deployment | Varies by deployment |
 | **Geo sharding** | Geographic locality | Hash slot | Manual | Auto (non-geo) | None |
 | **Split protocol** | Snapshot + bounded delta-sync | MIGRATE (blocking) | N/A | N/A | N/A |
 | **Managed Redis** | ✓ any REDIS_URL | ✓ single-node only | N/A | N/A | N/A |
@@ -438,13 +448,13 @@ Tile38 is the closest competitor — a purpose-built real-time geo database. Key
 
 1. **No GC pauses** — writing 11,000 aircraft positions every 30 seconds in a GC language (Go, Java, Python) causes stop-the-world events that spike read latency. Rust's ownership system means memory is freed deterministically at zero cost.
 
-2. **68 ns trie lookup** — the S2 trie fits in L2 cache on a modern CPU. In Python, the same lookup would be ~5 µs due to object overhead and interpreter costs. In Rust, it's a few dozen pointer dereferences.
+2. **In-process trie benchmark coverage** — the Criterion suite tracks token lookup and bulk insertion without Redis or HTTP noise. Results are machine-specific and are not published until reproduced with recorded inputs.
 
-3. **Tokio async** — `geo-node` handles 50k QPS on a single core using non-blocking I/O. The gossip loop, HTTP server, Redis persistence, and metrics collection all run as cooperative tasks on the same thread pool.
+3. **Tokio async** — `geo-node` uses non-blocking tasks for gossip, HTTP serving, Redis persistence, and metrics collection. Throughput must be established for the target deployment through load testing.
 
-4. **Memory efficiency** — `TrieNode` with `HashMap<u8, Box<TrieNode>>` is a cache-friendly structure. The entire global air traffic dataset (11k aircraft) fits in ~2 MB of heap memory.
+4. **Memory efficiency** — `TrieNode` stores S2-token branches in a `HashMap<u8, Box<TrieNode>>`; memory use depends on token distribution, payload size, and allocator behavior and should be profiled for the target workload.
 
-5. **`cargo` packaging** — single binary deployment. No JVM startup time. No Python virtualenv. The Docker image is 12 MB.
+5. **`cargo` packaging** — single-binary deployment with no JVM or Python runtime requirement. Image size depends on the target platform and build configuration.
 
 6. **FFI / gRPC** — Rust compiles to `cdylib` or `staticlib` that any language can bind to via FFI. The gRPC interface additionally gives clean cross-language access from .NET, Python, Go, and Java without any native compilation step on the client side.
 

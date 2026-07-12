@@ -1,6 +1,6 @@
 # Proxima — Technical Design Document
 
-**Status:** Draft v0.1 — benchmarks measured 2026-07-10 on a local Redis instance  
+**Status:** Draft v0.1 — benchmark harnesses are checked in; no published results have been independently reproduced
 **Scope:** Core library (`proxima`), distributed geo-node daemon, split/merge protocol
 
 > **Product framing:** Proxima is a distributed geospatial cache for sub-millisecond reads and multi-million entity storage, backed by any managed Redis instance. Each shard is a stateless Rust service with its own dedicated Redis — a $50/month managed Redis per region supports ~6 million entities. Shards split without downtime as load grows.
@@ -59,9 +59,11 @@ Root ∅
 
 - **Insert:** O(token_length) ≈ O(1) — S2 level 9 produces 5-character tokens.
 - **Viewport query:** O(covering_size) — a 200×200 km viewport at zoom 10 requires ≤ 8 token lookups, each resolving to a Redis `SET` of entity IDs.
-- **Memory:** ~150 bytes per node in the trie; 10,000 entities ≈ 1.5 MB in-process.
+- **Memory:** depends on token distribution, payload size, allocator behavior, and the active index sets; profile the target workload before capacity planning.
 
-> **Measured (Exp 5):** 5,000 entities with ~80-byte payloads consumed **976 B/entity** in Redis and produced exactly **3 Redis keys per entity** (`entity:`, `cell:`, `location:`). At this density, **1 million entities fits in ~1 GB** of Redis — within the free tier of all major managed Redis offerings.
+Redis storage use has not yet been published from a reproducible benchmark. The
+per-entity `entity`, `cell`, and `location` indexes are documented below, but
+their memory overhead depends on Redis encoding thresholds and workload shape.
 
 All keys are namespaced under a configurable prefix (default `proxima`):
 
@@ -72,7 +74,7 @@ All keys are namespaced under a configurable prefix (default `proxima`):
 | `{ns}:location:{id}` | STRING | current cell token | `entity_ttl_secs` |
 | `{ns}:written_at` | ZSET | score=ms, member=id | none (pruned by `prune_written_at`) |
 | `{ns}:active_cells` | SET | all occupied cell tokens | `entity_ttl_secs` |
-| `{ns}:range_claim:{ps}` | STRING | node_id | 120s (bootstrap guard) |
+| `/proxima/{ns}/range-claims/{prefix}` | etcd key | durable range owner | released by an explicit merge |
 
 The `written_at` sorted set is the only key without a TTL — it is pruned periodically by `prune_written_at()` which removes members whose backing entity key has expired. In steady state its size equals the live entity count.
 
@@ -132,17 +134,18 @@ $$T_{split} = \Delta t + \delta$$
 
 Compare Redis Cluster slot migration at 500k keys × 200 bytes = **100 MB** transfer with continuous MIGRATE overhead and client-visible MOVED errors throughout.
 
-### 3.4 Empirical validation (Exp 3)
+### 3.4 Required split validation
 
-The experiment writes entities at a controlled rate for a measured window Δt, then calls `entities_written_after(T_snapshot)` and counts what was captured.
+The experiment harness should write entities at a controlled rate during a
+split, call `entities_written_after(T_snapshot)`, and compare the result with
+an independent source-of-truth write log. No outcome has been recorded as a
+published result.
 
-| Run | W (achieved) | Δt | C actual writes | C captured (delta-sync) | Miss rate |
-|---|---|---|---|---|---|
-| Local Redis, single node | 64 w/s | 3.01 s | 193 | 192 | **0.5%** |
-
-The 1 missed entry shows this experiment does **not** establish a zero-loss guarantee. It is likely attributable to the timestamp boundary and Redis pipeline timing, but that requires targeted failure-injection and concurrent-write testing before it can be treated as a correctness invariant. At higher write rates, a larger $\Delta t$ may reduce the relative impact of timing jitter; that remains a hypothesis to measure, not a guarantee.
-
-**Plain-English summary:** during a split, the new shard asks for writes since the copy watermark and applies them in freshness order. The mechanism substantially narrows the catch-up window, but the distributed protocol remains experimental until zero-loss behavior is demonstrated under concurrent writes, retries, node crashes, and network partitions.
+The split protocol remains experimental until endpoint-level fault injection
+demonstrates the behavior for target `409`, target `401`, request timeout,
+target crash during bootstrap, and source crash during cleanup. Validation must
+also establish no data loss or unowned range under concurrent writes, retries,
+and network partitions.
 
 ---
 
@@ -346,10 +349,10 @@ cargo bench -p proxima -- --baseline v1       # compare
 
 Current benchmarks:
 
-| Benchmark | Description | Expected |
-|---|---|---|
-| `insert_10k` | Insert 10k entries into a fresh GeoTrie | < 20ms |
-| `query_token` | Single token lookup on 10k-entry trie | < 1µs |
+| Benchmark | Description |
+|---|---|
+| `insert_10k` | Insert 10k entries into a fresh GeoTrie |
+| `query_token` | Single token lookup on 10k-entry trie |
 
 **Benchmarks to add:**
 
@@ -363,55 +366,65 @@ Current benchmarks:
 
 ---
 
-## 8. Experimental Results
+## 8. Local Docker Experiment Results
 
-All experiments run against a local Docker Redis (single node, no network overhead) using `cargo run --release -p proxima-experiments`. Source: `demo/experiments/src/main.rs`. Re-run at any time with:
+The following is one reproducible direct library-to-Redis run. It is not an
+HTTP, geo-node, Kubernetes, cross-host, managed-Redis, or production-capacity
+benchmark.
+
+| Input | Value |
+|---|---|
+| Date | 2026-07-11 |
+| Host | Windows 11 Enterprise 10.0.26100; AMD EPYC 7763, 8 cores / 16 logical processors; 64 GB RAM |
+| Toolchain | Rust 1.97.0; release build |
+| Redis | Redis 7.4.9, `redis:7-alpine`, Docker Desktop 29.6.1, `noeviction`, AOF disabled, snapshots disabled |
+| Topology | One Docker Compose Redis container at `127.0.0.1:6379`; loopback connection; isolated logical database 15 was empty before the run |
+| Command | `.\scripts\run-experiments.ps1 -Redis 'redis://127.0.0.1:6379/15'` |
+| Raw output | Local `target/experiment-results-20260711-232333.txt` |
+
+### 8.1 Results
+
+| Experiment | Workload | Result |
+|---|---|---|
+| Write latency | 200 sequential `persist_trie` calls, 100-entry full snapshot each | 4.19 ms p50; 6.50 ms p95; 7.17 ms p99; 9.15 ms max |
+| Read latency | 5,000-entry full snapshot; 500 queries containing one occupied token | 1 token: 1.14 ms p50, 1.89 ms p99; 8 tokens: 1.14 ms p50, 2.05 ms p99; 32 tokens: 1.15 ms p50, 2.09 ms p99 |
+| Criterion insert | `insert_10k`, 100 samples | 13.176 ms estimate; 12.767–13.624 ms confidence interval |
+| Criterion lookup | `query_token`, 100 samples | 94.783 ns estimate; 93.755–96.133 ns confidence interval |
+| Split delta probe | 3.014 s window, 300 writes/s target | 201 writes attempted, 200 returned (99.5%); achieved 67 writes/s |
+| ZSET pruning | 300 entries, 3 s entity TTL, 4 s wait | 300 stale ZSET members before pruning; 300 removed; 0 remaining |
+| Redis memory | 5,000-entry full snapshot, workload payload | 1,076 B/entity; 14,990 keys, or 3.00 keys/entity |
+
+The split delta probe missed one write and did not reach its requested rate.
+It is therefore neither a zero-loss proof nor a high-throughput split result.
+The endpoint-level failure-injection scenarios remain required validation.
+
+### 8.2 Reproduction And Publication Requirements
+
+The available harnesses are:
 
 ```powershell
+# In-process Criterion micro-benchmarks; no Redis or HTTP involved.
+cargo bench -p proxima
+
+# Redis-backed experiment harness; requires a locally reachable Redis instance.
 .\scripts\run-experiments.ps1
+
+# Sustained concurrent traffic; configure the Redis endpoint before running.
+cargo run --release -p proxima-loadtest -- --writers 4 --readers 16 --duration-secs 60
 ```
 
-### 8.1 Write latency — `persist_trie(100 entities/batch)`
+Before adding a result, commit or attach the raw output and record:
 
-| p50 | p95 | p99 | p99.9 | max | batches |
-|---|---|---|---|---|---|
-| **2.95 ms** | 3.93 ms | 11.63 ms | 19.52 ms | 19.52 ms | 150 |
+1. Git revision, operating system, CPU model, memory, Rust version, and build profile.
+2. Redis version, deployment topology, network path, persistence configuration, and memory policy.
+3. Entity count, S2 level, payload-size distribution, request mix, concurrency, warm-up, and duration.
+4. Latency distribution (`p50`, `p95`, `p99`, maximum), throughput, failures, and the exact command line.
 
-Pushing 100 live positions (aircraft, couriers, IoT sensors) to Redis takes ~3 ms. The p99 spike to ~12 ms is Redis pipeline flush latency on loopback; on a same-datacenter managed Redis this flattens. Comfortably within budget for a 30-second poll cycle or a 5-second GPS feed.
-
-### 8.2 Read latency — `query_region` (viewport queries)
-
-| Viewport size | p50 | p95 | p99 | max |
-|---|---|---|---|---|
-| 1 S2 token (city block) | **683 µs** | 823 µs | 933 µs | 1.00 ms |
-| 8 S2 tokens (city) | **685 µs** | 825 µs | 986 µs | 1.28 ms |
-| 32 S2 tokens (country) | **697 µs** | 859 µs | 960 µs | 1.06 ms |
-
-Sub-millisecond regardless of viewport size. SUNION across 32 tokens adds only ~14 µs over 1 token — the S2 trie's locality guarantee means you touch only the cells you need, and the round-trip dominates. Sub-10 ms SLA is met with ~10× headroom.
-
-### 8.3 W×Δt bound — shard split catch-up completeness
-
-| W (achieved) | Δt | Actual writes | Captured (delta-sync) | Miss rate |
-|---|---|---|---|---|
-| 64 w/s | 3.01 s | 193 | **192** | **0.5%** |
-
-When a shard splits under live write load, the new shard asks "give me everything written since I started copying" — and gets essentially all of it. The 1 missed entry is sub-millisecond pipeline timing jitter, not a structural gap. At production write rates (thousands/sec), the miss rate decreases further because the pipeline round-trip is a smaller fraction of the write interval.
-
-### 8.4 ZSET drift — `prune_written_at` housekeeping
-
-| Written | TTL | Expired | Pruned | Remaining |
-|---|---|---|---|---|
-| 300 | 3 s | 300 | **300** | **0** |
-
-The `written_at` timestamp index is the only Redis key without auto-expiry. After entity keys expired, `prune_written_at()` removed 100% of stale entries. Running the prune loop every `entity_ttl_secs * 2` keeps ZSET cardinality ≈ live entity count indefinitely.
-
-### 8.5 Storage cost — memory per entity
-
-| Entities | Payload | Δ memory | Bytes/entity | Redis keys/entity |
-|---|---|---|---|---|
-| 5,000 | ~80 B JSON | 4.7 MB | **976 B** | **3.00** |
-
-Each entity (aircraft, courier, weather station) costs ~1 KB in Redis and creates exactly 3 Redis keys: `entity:`, `cell:`, and `location:`. Roughly **1 million entities per GB of Redis** — within the free tier of all major managed Redis services.
+The Redis-backed work that still needs broader benchmark coverage is
+`merge_entries`, `entities_written_after`, end-to-end split behavior under
+concurrent writes, and throughput across multiple shards. Results from a local
+loopback Redis must not be described as HTTP, cross-host, Kubernetes, or
+managed-service latency.
 
 ---
 
@@ -434,7 +447,7 @@ Each entity (aircraft, courier, weather station) costs ~1 KB in Redis and create
 
 | Gap | Impact | Mitigation today |
 |---|---|---|
-| Range metadata not Raft-replicated | Split-brain possible under partition | Redis CAS lock (`SET NX EX 120`); 120s TTL limits the window |
+| External etcd metadata dependency | Split/merge cannot proceed when the quorum is unavailable | `METADATA_ETCD_ENDPOINTS` is required; range changes fail closed |
 | `written_at` ZSET is per-shard | Cross-shard delta-sync needs two queries | Each shard's ZSET covers its own range; merge absorbs via `since_ms=0` |
 | SWIM: no indirect-ack piggybacking | Slight false-positive rate under load | Threshold tuning via `suspect_secs`/`dead_secs` |
 | No multi-level S2 indexing | Single S2 level per store | Use `with_config` to create stores at different levels for different zoom tiers |
