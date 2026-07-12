@@ -1,6 +1,6 @@
-# georedis — demo suite
+# proxima — demo suite
 
-Three live demo applications that exercise every layer of the georedis stack:  
+Three live demo applications that exercise every layer of the proxima stack:  
 real-time ingest, S2 spatial indexing, SSE streaming, distributed shard management, and split/merge orchestration.
 
 ---
@@ -34,8 +34,8 @@ Press **Ctrl+C** to stop everything cleanly.
 
 | URL | App | Backend |
 |-----|-----|---------|
-| http://localhost:5173 | OpenSky aircraft tracker | `georedis-demo` :3000 |
-| http://localhost:5174 | Live METAR weather map | `georedis-weather` :3001 |
+| http://localhost:5173 | OpenSky aircraft tracker | `proxima-demo` :3000 |
+| http://localhost:5174 | Live METAR weather map | `proxima-weather` :3001 |
 | http://localhost:5176 | Cluster monitor | geo-node cluster :4000–4003 |
 | http://localhost:4000–4003 | Distributed geo-nodes | Docker (with `-WithCluster`) |
 
@@ -104,7 +104,7 @@ Requires `.\scripts\run-demo.ps1 -WithCluster`.
 - Live event log: color-coded by event kind (split ⟿, bootstrap ↻, ok ✓, warn ⚠)
 
 ### Weather panel (embedded)
-- Polls `georedis-weather` metrics every 3 seconds
+- Polls `proxima-weather` metrics every 3 seconds
 - Subscribes to the weather SSE stream live — shows streaming progress `⚡ Streaming 12/77…` during each METAR cycle
 - Event ticker: WMO emoji + ICAO station ID + temperature + condition label
 
@@ -117,7 +117,7 @@ Requires `.\scripts\run-demo.ps1 -WithCluster`.
 A headless Rust test that spins up two Redis containers via testcontainers-rs and runs the full distributed protocol automatically.
 
 ```powershell
-cargo test -p georedis-cluster-test -- --nocapture
+cargo run -p proxima-cluster-test
 ```
 
 **Seven phases tested:**
@@ -136,7 +136,7 @@ cargo test -p georedis-cluster-test -- --nocapture
 Drives sustained write and read QPS at the geo-node cluster.
 
 ```powershell
-cargo run -p georedis-loadtest --release -- --target http://localhost:4000 --rps 5000
+cargo run -p proxima-loadtest --release -- --target http://localhost:4000 --rps 5000
 ```
 
 ---
@@ -163,7 +163,7 @@ demo/
 | Tool | Version |
 |------|---------|
 | [Rust](https://rustup.rs) | stable (≥ 1.87) |
-| [Node.js](https://nodejs.org) | ≥ 20 |
+| [Node.js](https://nodejs.org) | ≥ 24 |
 | [Docker Desktop](https://docker.com) | any recent |
 
 No API keys required for any demo.

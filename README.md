@@ -143,7 +143,7 @@ flowchart LR
 | Tool | Version |
 |---|---|
 | [Rust](https://rustup.rs) | stable |
-| [Node.js](https://nodejs.org) | ≥ 20 |
+| [Node.js](https://nodejs.org) | ≥ 24 |
 | [Docker](https://docker.com) | any recent |
 
 ### Single-node demo (aircraft tracker)
@@ -180,7 +180,7 @@ All values are environment variables (copy `config/.env.example` to `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Local or managed Redis. Use `rediss://` for TLS. |
-| `SQLITE_PATH` | `georedis.db` | Path for metadata / position-history store |
+| `SQLITE_PATH` | `proxima.db` | Path for metadata / position-history store |
 | `S2_LEVEL` | `9` | Cell granularity — 9≈70km, 12≈2km |
 | `POLL_INTERVAL_SECS` | `30` | OpenSky poll cadence |
 | `SPLIT_THRESHOLD_KEYS` | `500000` | Auto-split shard when key count exceeds this |
@@ -332,11 +332,11 @@ curl "http://localhost:4000/trace?lat=40.7&lon=-74.0"
 kubectl apply -k demo/k8s/
 
 # Check ring convergence
-kubectl exec -n georedis deploy/geo-node-0 -- \
+kubectl exec -n proxima deploy/geo-node-0 -- \
   curl -s http://geo-node-0:4000/cluster | jq '.[].node_id'
 
 # Trigger a geographic split
-kubectl exec -n georedis deploy/geo-node-1 -- \
+kubectl exec -n proxima deploy/geo-node-1 -- \
   curl -X POST http://geo-node-1:4001/split \
        -d '{"target":"geo-node-3:4003","split_point":"7"}'
 ```
@@ -402,7 +402,7 @@ S2 cells have **equal area** regardless of latitude and **no antimeridian discon
 
 PostGIS is the gold standard for analytical queries on *static or slowly-changing* geographic data. For `UPDATE SET lat=$1, lon=$2 WHERE id=$3` happening 11,000 times every 30 seconds, PostgreSQL's MVCC creates 11,000 dead row versions that autovacuum must reclaim. The GiST spatial index needs to rebalance. You can mitigate this with `geom = ST_SetSRID(ST_Point($lon, $lat), 4326)` updates and partial indexes, but you're fighting the engine's design.
 
-georedis replaces each entity atomically via `SET ... EX 120` — Redis's O(1) string operation.
+proxima replaces each entity atomically via `SET ... EX 120` — Redis's O(1) string operation.
 
 #### vs Elasticsearch geo_point
 
