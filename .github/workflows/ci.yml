@@ -33,7 +33,7 @@ jobs:
         working-directory: demo/ui
       - run: npm run build
         working-directory: demo/ui
-      - run: npm install
+      - run: npm ci
         working-directory: demo/cluster-ui
       - run: npm run build
         working-directory: demo/cluster-ui

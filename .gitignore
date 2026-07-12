@@ -10,7 +10,8 @@ demo/ui/dist/
 demo/ui/.vite/
 demo/cluster-ui/node_modules/
 demo/cluster-ui/dist/
-package-lock.json
+# Root-level lock file only (demo UI lock files ARE tracked for CI reproducibility)
+/package-lock.json
 
 # ── Environment / secrets ──────────────────────────────────────────────────
 .env
