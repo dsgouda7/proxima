@@ -1,14 +1,75 @@
 # proxima
 
-**A distributed geospatial cache for moving objects such as aircraft, couriers, and IoT devices, backed by Redis.**
+**A distributed geospatial cache for moving objects — aircraft, couriers, IoT devices, and anything else with a latitude and longitude — backed by Redis.**
 
-Shards can be split online as load grows through an authenticated operator API. Each shard is a stateless Rust service pointed at its own Redis — run it as a Docker sidecar, a K8s pod, or against Azure Cache / ElastiCache in any region. Distributed split and merge additionally require a managed, quorum-backed etcd v3 cluster configured with `METADATA_ETCD_ENDPOINTS`.
+The core idea: index every entity by its [Google S2](https://s2geometry.io/) cell token and store those tokens in a trie so that a viewport query walks only the 5–6 relevant prefix branches, not the entire dataset. That makes *read* latency near-constant regardless of how many entities are stored globally.
 
 > **Maturity:** The core library and single-node demo are production-ready. Distributed range changes fail closed unless an etcd v3 metadata authority is configured. etcd transactionally records each range owner through its Raft quorum; Redis is not used for topology authority.
 
 [![CI](https://github.com/dsgouda7/proxima/actions/workflows/ci.yml/badge.svg)](https://github.com/dsgouda7/proxima/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/proxima.svg)](https://crates.io/crates/proxima)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+---
+
+## Live demos
+
+Three independent demos ship with the repository, each showing a different angle of the same spatial-index core.
+
+### 📻 Radio Explorer — 30 000 streams indexed locally, play any channel in one click
+
+The most striking demonstration of proxima's storage efficiency: **12 500+ geo-tagged live radio streams** from [Radio Browser](https://www.radio-browser.info) are fetched from a public API, inserted into the S2 trie entirely in-memory (no Redis, no database), and served back at any zoom level in under a millisecond.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Zoom 0–3  →  74 continental bubbles          (S2 level 2) │
+│  Zoom 4–5  →  182 country clusters            (S2 level 3) │
+│  Zoom 6–7  →  411 regional clusters           (S2 level 4) │
+│  Zoom 8+   →  853 city-area leaf cells        (S2 level 5) │
+│              ↳ click any leaf → flyout with station list   │
+│              ↳ ▶ Play streams directly in the browser      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why this matters:** 12 500 URLs fit in a hand-full of S2 level-5 cells. The entire spatial index — built from the API response in under 100 ms at startup — lives in ~8 MB of RAM. Queries against it never touch disk or a remote cache. The same trie that routes aircraft queries across three distributed Redis shards here proves it can serve as a zero-dependency in-process spatial store.
+
+```bash
+# Start the radio API (no Redis needed)
+cargo run -p proxima-radio          # → http://localhost:3002
+
+# Start the UI
+cd demo/ui && npm run dev:radio     # → http://localhost:5176
+```
+
+**Interaction:**
+- **Non-leaf marker** — shows only the station count; hover for a tooltip. Clicking has no effect — zoom in first.
+- **Leaf marker (zoom ≥ 8)** — glowing indigo border indicates it is interactive. Click to open the station flyout.
+- **Flyout** — scrollable list sorted by community votes; search by name, genre, or country; one ▶ / ⏹ per station; playing a new stream auto-stops the previous one.
+
+---
+
+### ✈ Live Aircraft Tracker — 11 000+ aircraft, sub-second regional queries
+
+Polls [OpenSky Network](https://opensky-network.org) every 30 s and stores position updates in a Redis-backed S2 trie. Viewport queries return only the aircraft visible in the current map bounds without scanning the full dataset.
+
+```bash
+.\scripts\run-demo.ps1      # Windows
+./scripts/run-demo.sh       # Linux / macOS
+# → http://localhost:5173
+```
+
+---
+
+### 🌦 Live Weather — 5 000 METAR stations, streaming drill-down
+
+Streams live METAR observations from [aviationweather.gov](https://aviationweather.gov) into the trie via SSE. Zoom in past level 10 to switch from S2 aggregate clusters to individual station readings with full weather metadata.
+
+```bash
+cargo run -p proxima-weather        # → http://localhost:3000 (or $SERVER_PORT)
+cd demo/ui && npm run dev:weather   # → http://localhost:5174
+```
+
+---
 
 ---
 
@@ -156,9 +217,21 @@ flowchart LR
 |---|---|
 | [Rust](https://rustup.rs) | stable |
 | [Node.js](https://nodejs.org) | ≥ 24 |
-| [Docker](https://docker.com) | any recent |
+| [Docker](https://docker.com) | any recent (aircraft / cluster demos) |
 
-### Single-node demo (aircraft tracker)
+### Radio Explorer (no Docker, no Redis)
+
+```powershell
+# Windows
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+cargo run -p proxima-radio                      # API on :3002
+# new terminal:
+cd demo/ui; npm install; npm run dev:radio      # UI  on :5176
+```
+
+Open **http://localhost:5176** — zoom to any city, click a 📻 leaf marker, browse and play local radio stations in the flyout.
+
+### Aircraft tracker (requires Docker for Redis)
 
 ```powershell
 # Windows
@@ -172,6 +245,17 @@ flowchart LR
 ```
 
 Open **http://localhost:5173** — 11,000+ live aircraft, rotating plane icons, Redis latency panel.
+
+### Weather stations (requires Docker for Redis)
+
+```powershell
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+cargo run -p proxima-weather                    # API on :3000
+# new terminal:
+cd demo/ui; npm run dev:weather                 # UI  on :5174
+```
+
+Open **http://localhost:5174** — global METAR coverage; zoom to a city to switch from S2 cluster aggregates to individual station readings.
 
 ### Distributed cluster demo (3 shards + gossip + split)
 
@@ -198,6 +282,9 @@ All values are environment variables (copy `config/.env.example` to `.env`):
 | `SPLIT_THRESHOLD_KEYS` | `500000` | Recommended operator split threshold; automation is not yet implemented |
 | `SPLIT_THRESHOLD_WRITE_QPS` | `50000` | Recommended operator split threshold; automation is not yet implemented |
 | `MERGE_THRESHOLD_KEYS` | `25000` | Recommended operator merge threshold; automation is not yet implemented |
+| `RADIO_PORT` | `3002` | Port for the radio demo API (`proxima-radio`; no Redis dependency) |
+| `RADIO_API_BASE` | `https://de1.api.radio-browser.info` | Radio Browser mirror to fetch station data from |
+| `RADIO_FETCH_LIMIT` | `50000` | Maximum geo-tagged stations to request from Radio Browser |
 | `SUSPECT_SECS` | `10` | Gossip: mark node Suspect after N silent seconds |
 | `DEAD_SECS` | `30` | Gossip: mark node Dead after N silent seconds |
 | `GOSSIP_INTERVAL_SECS` | `2` | How often each node gossips with peers |

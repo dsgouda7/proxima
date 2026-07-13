@@ -11,6 +11,7 @@ import 'leaflet/dist/leaflet.css';
 const REGION_ZOOM = 6;   // switch to Redis region query above this zoom
 const DETAIL_ZOOM = 9;   // fetch SQLite detail below this count
 const DETAIL_MAX  = 5;   // only fetch detail when <= this many aircraft in view
+const WEATHER_STATION_ZOOM = 10; // server returns individual weather stations here
 
 // Prevent querying ghost world-copies when the user pans far east/west.
 function clampBounds(s: number, w: number, n: number, e: number) {
@@ -105,7 +106,9 @@ export default function App() {
 
   const handleSelect = useCallback((a: Aircraft) => {
     setSelected(a.id);
-    mapRef.current?.flyTo([a.lat, a.lon], Math.max(mapRef.current.getZoom(), 9), { animate: true, duration: 0.8 });
+    const isWeatherCluster = a.payload.__is_weather === true && (a.payload.count ?? 1) > 1;
+    const targetZoom = isWeatherCluster ? WEATHER_STATION_ZOOM : DETAIL_ZOOM;
+    mapRef.current?.flyTo([a.lat, a.lon], Math.max(mapRef.current.getZoom(), targetZoom), { animate: true, duration: 0.8 });
   }, []);
 
   const handleHover = useCallback((a: Aircraft) => setHoveredId(a.id), []);
@@ -176,9 +179,10 @@ export default function App() {
           zoom={3}
           style={{ height: '100%', width: '100%', background: '#0c1a2e' }}
           ref={mapRef}
+          minZoom={-1}
           worldCopyJump={true}
         >
-          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" attribution='&copy; OSM &copy; CARTO' maxZoom={19} />
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" attribution='&copy; OSM &copy; CARTO' minZoom={0} maxZoom={19} />
           <MapWatcher onBounds={handleBounds} />
           {aircraft.map(a => (
             <AircraftMarker

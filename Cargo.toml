@@ -3,6 +3,7 @@ members  = [
     "lib",
     "demo/server",
     "demo/weather-server",
+    "demo/radio-server",
     "demo/loadtest",
     "demo/geo-node",
     "demo/cluster-test",

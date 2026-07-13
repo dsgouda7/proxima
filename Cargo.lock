@@ -2037,6 +2037,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxima-radio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "dotenvy",
+ "proxima",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "proxima-weather"
 version = "0.1.0"
 dependencies = [

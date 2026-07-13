@@ -27,6 +27,30 @@ export interface AircraftPayload {
   count?:           number | null;
   /** WMO weather interpretation code (0=clear … 99=thunderstorm+hail) */
   wmo_code?:        number | null;
+
+  // ── Radio-station extras ──────────────────────────────────────────────────
+  /** True when this entry comes from the radio server */
+  __is_radio?:      boolean;
+  /** Dominant genre tags from the top station (comma-separated) */
+  top_tags?:        string | null;
+  /** ISO 3166-1 alpha-2 country code of the top station */
+  top_cc?:          string | null;
+  /** For leaf-level cell markers: every station in this S2 cell */
+  stations?:        RadioStationInfo[] | null;
+}
+
+/** Compact station record embedded in a leaf-level radio cluster. */
+export interface RadioStationInfo {
+  uuid:        string;
+  name:        string;
+  stream_url:  string;
+  tags:        string;
+  country:     string;
+  countrycode: string;
+  codec:       string;
+  bitrate:     number;
+  votes:       number;
+  favicon:     string;
 }
 
 export interface Aircraft {
