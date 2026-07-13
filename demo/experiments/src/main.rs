@@ -1,13 +1,20 @@
 //! proxima — Performance Experiment Suite
 //!
 //! Runs five controlled experiments against a local Redis and prints
-//! formatted results tables with the data points from TECHNICAL.md:
+//! formatted results tables:
 //!
-//!   Exp 1  Write latency (persist_trie)      — p50/p95/p99/max histograms
-//!   Exp 2  Read latency (query_region)        — p50/p95/p99/max histograms
-//!   Exp 3  W×Δt bound validation              — empirical vs theoretical catch-up count
-//!   Exp 4  ZSET drift after TTL expiry        — prune_written_at removes expired scores
-//!   Exp 5  Memory per entity                  — Redis bytes per stored entity
+//!   Exp 1  Write latency  — persist_trie (trie) vs NaiveFlatStore (HSET per cell)
+//!   Exp 2  Read latency   — query_region (trie) vs NaiveFlatStore (HGETALL per cell)
+//!   Exp 3  W×Δt bound     — empirical vs theoretical catch-up count
+//!   Exp 4  ZSET drift      — prune_written_at removes expired scores
+//!   Exp 5  Memory          — Redis bytes per stored entity
+//!
+//! The NaiveFlatStore is the structural baseline: it stores entities in one
+//! Redis Hash per S2 cell (`HSET {ns}:flat:{token} {id} {json}`) with no
+//! secondary indexes.  It is the minimum-ceremony alternative to the
+//! multi-key schema used by RedisStore (entity + cell-set + location keys).
+//! Exp 1 measures write overhead; Exp 2 measures read overhead; the
+//! difference reveals what the richer schema costs.
 //!
 //! Usage:
 //!   cargo run --release -p proxima-experiments -- --redis redis://127.0.0.1:6379
@@ -90,6 +97,107 @@ fn random_coord(rng: &mut impl Rng) -> (f64, f64) {
     )
 }
 
+// ── NaiveFlatStore ────────────────────────────────────────────────────────
+//
+// Baseline alternative to RedisStore. Uses one Redis Hash per S2 cell:
+//
+//   HSET {ns}:flat:{token}  {entity_id}  {json}
+//
+// Writes: one HSET field per entity. No cell-set, no location reverse-lookup,
+// no written_at index. Minimum possible write amplification.
+//
+// Reads: HGETALL {token} for each token, then deserialise values.
+// O(entries_in_cell) per token vs RedisStore's SUNION + pipelined GETs.
+//
+// Assumptions being tested:
+//   - RedisStore's 3-key-per-entity schema adds measurable write overhead.
+//   - HGETALL returns all cell members in one round-trip; RedisStore's SUNION
+//     + GET pipeline uses more commands but deduplicates across overlapping
+//     cells and supports TTL per entity.
+//   - The flat store cannot answer range queries (no S2 cell-level TTL,
+//     no active-cell diffing, no written_at index for delta-sync).
+
+struct NaiveFlatStore {
+    redis_url: String,
+    key_prefix: String,
+}
+
+impl NaiveFlatStore {
+    fn new(redis_url: &str, namespace: &str) -> Self {
+        Self {
+            redis_url: redis_url.to_string(),
+            key_prefix: namespace.to_string(),
+        }
+    }
+
+    fn cell_key(&self, token: &str) -> String {
+        format!("{{{}}}.flat:{}", self.key_prefix, token)
+    }
+
+    /// Write all trie entries as HSET fields: one hash per S2 cell.
+    async fn write_trie(&self, trie: &GeoTrie) -> Result<()> {
+        let client = redis::Client::open(self.redis_url.as_str())?;
+        let mut conn = client.get_multiplexed_async_connection().await?;
+        let entries = trie.all_entries();
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        for entry in &entries {
+            let token = trie.cell_token(entry.lat, entry.lon);
+            let json = serde_json::to_string(entry)?;
+            let key = self.cell_key(&token);
+            pipe.cmd("HSET")
+                .arg(&key)
+                .arg(&entry.id)
+                .arg(&json)
+                .ignore();
+        }
+        pipe.query_async::<()>(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Read all entries for a list of tokens via HGETALL per token.
+    async fn read_region(&self, tokens: &[String]) -> Result<Vec<GeoEntry>> {
+        let client = redis::Client::open(self.redis_url.as_str())?;
+        let mut conn = client.get_multiplexed_async_connection().await?;
+        let mut results = Vec::new();
+        for token in tokens {
+            let key = self.cell_key(token);
+            let fields: Vec<(String, String)> = conn.hgetall(&key).await.unwrap_or_default();
+            for (_, json) in fields {
+                if let Ok(entry) = serde_json::from_str::<GeoEntry>(&json) {
+                    results.push(entry);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// Delete all keys for this namespace.
+    async fn cleanup(&self) -> Result<()> {
+        let client = redis::Client::open(self.redis_url.as_str())?;
+        let mut conn = client.get_multiplexed_async_connection().await?;
+        let mut cursor = 0u64;
+        loop {
+            let (new_cur, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(format!("{{{}}}*", self.key_prefix))
+                .arg("COUNT")
+                .arg(500u64)
+                .query_async(&mut conn)
+                .await?;
+            if !keys.is_empty() {
+                conn.del::<_, ()>(keys).await?;
+            }
+            cursor = new_cur;
+            if cursor == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Delete all keys matching the store's `{namespace}:*` hash-tagged keyspace.
 async fn cleanup(client: &redis::Client, namespace: &str) -> Result<()> {
     let mut conn = client.get_multiplexed_async_connection().await?;
@@ -157,35 +265,61 @@ fn header_row() {
 
 async fn exp1_write_latency(client: &redis::Client, args: &Args) -> Result<()> {
     section(&format!(
-        "Exp 1 — Write latency  persist_trie({}×{} entities)",
+        "Exp 1 — Write latency  persist_trie vs NaiveFlatStore  ({}×{} entities)",
         args.batches, args.batch_size
     ));
+    println!("  trie  = RedisStore::persist_trie   (entity + cell-set + location + written_at)");
+    println!("  flat  = NaiveFlatStore::write_trie  (HSET per cell, no secondary indexes)");
+    println!();
 
-    let namespace = ns(1);
-    let store = Arc::new(
-        RedisStore::with_config(&args.redis, Metrics::new(), 120)?.with_namespace(&namespace),
+    let ns_trie = ns(1);
+    let ns_flat = format!("flat-{ns_trie}");
+    let trie_store = Arc::new(
+        RedisStore::with_config(&args.redis, Metrics::new(), 120)?.with_namespace(&ns_trie),
     );
-    let mut rng = StdRng::seed_from_u64(42);
-    let mut hist = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+    let flat_store = NaiveFlatStore::new(&args.redis, &ns_flat);
+
+    let mut rng_trie = StdRng::seed_from_u64(42);
+    let mut rng_flat = StdRng::seed_from_u64(42); // identical seed → same writes
+    let mut hist_trie = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+    let mut hist_flat = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
 
     for batch in 0..args.batches {
         let mut trie = GeoTrie::new(9);
         for i in 0..args.batch_size {
-            let (lat, lon) = random_coord(&mut rng);
+            let (lat, lon) = random_coord(&mut rng_trie);
             trie.insert(mk_entry(&format!("b{batch}-e{i}"), lat, lon));
         }
         let t0 = Instant::now();
-        store.persist_trie(&trie).await?;
-        hist.record(t0.elapsed().as_micros() as u64)?;
+        trie_store.persist_trie(&trie).await?;
+        hist_trie.record(t0.elapsed().as_micros() as u64)?;
+
+        // Same entities, same coordinates — different store
+        let mut flat_trie = GeoTrie::new(9);
+        for i in 0..args.batch_size {
+            let (lat, lon) = random_coord(&mut rng_flat);
+            flat_trie.insert(mk_entry(&format!("b{batch}-e{i}"), lat, lon));
+        }
+        let t0 = Instant::now();
+        flat_store.write_trie(&flat_trie).await?;
+        hist_flat.record(t0.elapsed().as_micros() as u64)?;
     }
 
-    // Also report what the lib's own Metrics recorded
-    let snap = store.metrics().snapshot();
-
     header_row();
-    hdr_row(&hist, "persist_trie");
+    hdr_row(&hist_trie, "trie");
+    hdr_row(&hist_flat, "flat");
+
+    let ratio =
+        hist_trie.value_at_quantile(0.50) as f64 / hist_flat.value_at_quantile(0.50).max(1) as f64;
     println!();
-    println!("  lib Metrics (same data via store.metrics().snapshot()):");
+    println!(
+        "  trie/flat p50 ratio: {:.2}×  \
+         (>1 = trie costs more; expected due to 3-key schema + active-cell Lua)",
+        ratio
+    );
+    println!();
+    println!("  lib Metrics (trie store):");
+    let snap = trie_store.metrics().snapshot();
     println!(
         "  write_p50={} write_p99={} write_max={}",
         proxima::MetricsSnapshot::fmt_us(snap.write_p50_us),
@@ -193,7 +327,8 @@ async fn exp1_write_latency(client: &redis::Client, args: &Args) -> Result<()> {
         proxima::MetricsSnapshot::fmt_us(snap.write_max_us),
     );
 
-    cleanup(client, &namespace).await?;
+    cleanup(client, &ns_trie).await?;
+    flat_store.cleanup().await?;
     Ok(())
 }
 
@@ -259,11 +394,62 @@ async fn exp2_read_latency(client: &redis::Client, args: &Args) -> Result<()> {
         hist_large.record(start.elapsed().as_micros() as u64)?;
     }
 
+    // ── Baseline: NaiveFlatStore read ─────────────────────────────────────
+    let ns_flat = format!("flat-{namespace}");
+    let flat_store = NaiveFlatStore::new(&args.redis, &ns_flat);
+    println!("  Seeding flat store with same 5000 entities...");
+    flat_store.write_trie(&seed_trie).await?;
+
+    let mut hist_flat_small = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+    let mut hist_flat_medium = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+    let mut hist_flat_large = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+    let mut rng2 = StdRng::seed_from_u64(99); // same seed → same token sequence
+    for _ in 0..args.queries {
+        let token = occupied_tokens[rng2.gen_range(0..occupied_tokens.len())].clone();
+        let small_tokens = vec![token.clone()];
+        let medium_tokens = std::iter::once(token.clone())
+            .chain((0..7).map(|i| format!("{}{:x}", &token[..token.len().saturating_sub(1)], i)))
+            .collect::<Vec<_>>();
+        let large_tokens = std::iter::once(token.clone())
+            .chain((0..31).map(|i| format!("{}{:x}", &token[..token.len().saturating_sub(2)], i)))
+            .collect::<Vec<_>>();
+
+        let start = Instant::now();
+        flat_store.read_region(&small_tokens).await?;
+        hist_flat_small.record(start.elapsed().as_micros() as u64)?;
+
+        let start = Instant::now();
+        flat_store.read_region(&medium_tokens).await?;
+        hist_flat_medium.record(start.elapsed().as_micros() as u64)?;
+
+        let start = Instant::now();
+        flat_store.read_region(&large_tokens).await?;
+        hist_flat_large.record(start.elapsed().as_micros() as u64)?;
+    }
+
+    println!();
+    println!("  ── trie (RedisStore: SUNION + pipelined GET) ──");
     header_row();
     hdr_row(&hist_small, "1 token");
     hdr_row(&hist_medium, "8 tokens");
     hdr_row(&hist_large, "32 tokens");
+    println!();
+    println!("  ── flat (NaiveFlatStore: HGETALL per token) ──");
+    header_row();
+    hdr_row(&hist_flat_small, "1 token");
+    hdr_row(&hist_flat_medium, "8 tokens");
+    hdr_row(&hist_flat_large, "32 tokens");
 
+    let ratio_1 = hist_small.value_at_quantile(0.50) as f64
+        / hist_flat_small.value_at_quantile(0.50).max(1) as f64;
+    let ratio_32 = hist_large.value_at_quantile(0.50) as f64
+        / hist_flat_large.value_at_quantile(0.50).max(1) as f64;
+    println!();
+    println!(
+        "  trie/flat p50 ratio — 1 token: {:.2}×  32 tokens: {:.2}×",
+        ratio_1, ratio_32
+    );
+    println!("  (>1 = trie slower; flat has fewer commands but no TTL/dedup/location index)");
     println!();
     println!(
         "  lib Metrics read_p99={} read_max={}",
@@ -272,6 +458,7 @@ async fn exp2_read_latency(client: &redis::Client, args: &Args) -> Result<()> {
     );
 
     cleanup(client, &namespace).await?;
+    flat_store.cleanup().await?;
     Ok(())
 }
 

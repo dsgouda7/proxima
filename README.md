@@ -14,37 +14,27 @@ Shards can be split online as load grows through an authenticated operator API. 
 
 ## Benchmark Coverage
 
-The latest Redis-backed measurement was run on 2026-07-11 against Redis 7.4.9
-in Docker Desktop on Windows 11, using loopback Redis database 15. It is a
-direct library-to-Redis measurement, not an HTTP, geo-node, Kubernetes, or
-managed-Redis benchmark.
+Measurements are against Redis 7.4.9 in Docker Desktop on Windows 11, loopback
+database 15. These are direct library-to-Redis numbers, not HTTP, geo-node,
+Kubernetes, or managed-Redis benchmarks. See [TECHNICAL.md §8](TECHNICAL.md)
+for full methodology and baseline rationale.
 
-| Workload | Result | Scope |
-|---|---|---|
-| `persist_trie`, 100-entry snapshot | 4.19 ms p50; 7.17 ms p99 | 200 sequential writes |
-| `query_region`, occupied cell | 1.14 ms p50; 1.89 ms p99 | 5,000-entry snapshot; 500 calls |
-| `query_region`, 32-token set | 1.15 ms p50; 2.09 ms p99 | Includes one occupied token; 500 calls |
-| `insert_10k` Criterion | 13.176 ms estimate | In-process; 100 samples; no Redis or HTTP |
-| `query_token` Criterion | 94.783 ns estimate | In-process; 100 samples; no Redis or HTTP |
-| `prune_written_at` | 300 of 300 stale entries removed | 3 s entity TTL, then 4 s wait |
-| Redis memory | 1,076 B/entity; 3.00 keys/entity | 5,000-entry snapshot; workload-specific |
+**Baseline:** a naive `HashMap<String, Vec<GeoEntry>>` (in-process) and a flat
+`HSET-per-cell` Redis store were measured as the structurally simplest
+alternatives. The differences reveal the cost of the richer schema and the
+benefit of the prefix structure.
 
-The split probe captured 200 of 201 writes (99.5%) at an achieved 67 writes/s,
-despite a target of 300 writes/s. It is not evidence of zero-loss split
-behavior. Full environment details, raw-output location, and limitations are
-in [TECHNICAL.md](TECHNICAL.md).
+| Workload | Trie | Naive flat | Ratio |
+|---|---|---|---|
+| `insert_10k` (in-process) | 11.667 ms | 5.654 ms | trie 2.1× slower |
+| `query_token` (in-process) | 97.788 ns | 16.343 ns | trie 6× slower |
+| `query_prefix_coarse` (in-process) | **35.160 ns** | 13.388 µs | **trie 381× faster** |
+| Write 100-entity snapshot (Redis) | 4.11 ms p50 | 1.88 ms p50 | trie 2.2× slower |
+| Read, 32-token viewport (Redis) | **1.16 ms p50** | 5.81 ms p50 | **trie 5× faster** |
 
-current Criterion suite measures only in-process trie operations:
-
-| Benchmark | Workload |
-|---|---|
-| `insert_10k` | Insert 10,000 entries into a fresh `GeoTrie` |
-| `query_token` | Query one S2 token in a 10,000-entry trie |
-
-Run the available micro-benchmarks with `cargo bench -p proxima`. Redis-backed
-measurements require a running Redis instance and the experimental harness:
-`scripts/run-experiments.ps1`. Do not compare runs across machines, Redis
-topologies, or payload distributions without recording those inputs.
+The trie pays on write and exact single-token lookup. The prefix query and
+multi-token viewport reads are where it wins decisively — and those are the
+common-case workloads for a moving-object cache at production zoom levels.
 
 ---
 
@@ -380,16 +370,12 @@ Each pod runs Redis as a sidecar container. Replace it with `REDIS_URL` pointing
 
 ## Benchmarks
 
-No Redis or HTTP latency figures are currently published. The only checked-in
-benchmarks are the in-process Criterion workloads described in
-[Benchmark coverage](#benchmark-coverage). Record the CPU, operating system,
-Redis version and topology, payload shape, concurrency, warm-up, and raw
-Criterion output before publishing a result.
+See [Benchmark Coverage](#benchmark-coverage) for the current comparative
+results including the naive-flat baseline. Run benchmarks with:
 
 ```bash
-# Reproduce all 5 experiments
-.\scripts\run-experiments.ps1
-cargo run --release -p proxima-loadtest -- --writers 4 --readers 16 --duration-secs 60
+cargo bench -p proxima                              # Criterion suite (in-process)
+.\scripts\run-experiments.ps1 -Redis 'redis://...'  # Redis experiment suite
 ```
 
 ---

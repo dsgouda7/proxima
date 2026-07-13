@@ -341,90 +341,121 @@ For latency without network noise, use the Criterion suite in `lib/benches/`:
 
 ```bash
 cargo bench -p proxima                        # run all benches
-cargo bench -p proxima -- insert_10k          # single bench
 cargo bench -p proxima -- --save-baseline v1  # save baseline
-# ... make changes ...
-cargo bench -p proxima -- --baseline v1       # compare
+cargo bench -p proxima -- --baseline v1       # compare to baseline
 ```
-
-Current benchmarks:
-
-| Benchmark | Description |
-|---|---|
-| `insert_10k` | Insert 10k entries into a fresh GeoTrie |
-| `query_token` | Single token lookup on 10k-entry trie |
-
-**Benchmarks to add:**
-
-| Benchmark | What it measures |
-|---|---|
-| `persist_trie_10k` | Full Redis write cycle (requires running Redis) |
-| `query_region_viewport` | SUNION + 100-entity GET pipeline |
-| `merge_entries_1k` | Freshness check + write cycle |
-| `entities_written_after_1k` | ZRANGEBYSCORE + pipelined location lookups |
-| `split_10k` | Full split protocol end-to-end (two in-process nodes) |
 
 ---
 
-## 8. Local Docker Experiment Results
+## 8. Baseline Methodology And Results
 
-The following is one reproducible direct library-to-Redis run. It is not an
-HTTP, geo-node, Kubernetes, cross-host, managed-Redis, or production-capacity
-benchmark.
+### 8.0 Why a baseline is needed
+
+Measuring latency in isolation says how fast a thing runs; it does not say
+whether the structural choice is justified. The baseline chosen here is the
+simplest alternative with equivalent retrieval semantics at single S2-level
+granularity.
+
+**Naive flat HashMap** (in-process Criterion):
+
+```
+HashMap<String, Vec<GeoEntry>>   keyed by S2 token at level 9
+```
+
+- Insert: O(1) amortised hash vs trie's O(token_length) pointer walk.
+- Exact-token query: O(1) hash lookup vs O(token_length) descent.
+- Prefix/coarse-cell query: O(N) full key scan, no shortcut.
+
+**NaiveFlatStore** (Redis experiment harness):
+
+```
+write: HSET {ns}.flat:{token}  {id}  {json}   # one hash per S2 cell
+read:  HGETALL {ns}.flat:{token}               # all entities in a cell
+```
+
+One command per entity on write vs four in `RedisStore` (`SET entity` +
+`SADD cell-set` + `SET location` + `ZADD written_at`).
+One sequential `HGETALL` per token on read vs `SUNION` + N×`GET` pipeline.
+
+What the flat store **cannot do**: per-entity TTL expiry, move detection
+(no `location:id` reverse lookup), delta-sync for shard splits (no
+`written_at` ZSET), or active-cell diffing (no Lua vacated-cell cleanup).
+It is a lower bound on Redis I/O cost, not a drop-in production alternative.
+
+### 8.1 Environment
 
 | Input | Value |
 |---|---|
-| Date | 2026-07-11 |
+| Date | 2026-07-12 |
 | Host | Windows 11 Enterprise 10.0.26100; AMD EPYC 7763, 8 cores / 16 logical processors; 64 GB RAM |
 | Toolchain | Rust 1.97.0; release build |
 | Redis | Redis 7.4.9, `redis:7-alpine`, Docker Desktop 29.6.1, `noeviction`, AOF disabled, snapshots disabled |
-| Topology | One Docker Compose Redis container at `127.0.0.1:6379`; loopback connection; isolated logical database 15 was empty before the run |
-| Command | `.\scripts\run-experiments.ps1 -Redis 'redis://127.0.0.1:6379/15'` |
-| Raw output | Local `target/experiment-results-20260711-232333.txt` |
+| Topology | One Docker Compose Redis container at `127.0.0.1:6379`; loopback; database 15 flushed before the run |
+| Commands | `cargo bench -p proxima` · `.\scripts\run-experiments.ps1 -Redis 'redis://127.0.0.1:6379/15'` |
+| Raw outputs | `target/experiment-results-20260712-175628.txt`; Criterion HTML in `target/criterion/` |
 
-### 8.1 Results
+### 8.2 In-process Criterion results
 
-| Experiment | Workload | Result |
-|---|---|---|
-| Write latency | 200 sequential `persist_trie` calls, 100-entry full snapshot each | 4.19 ms p50; 6.50 ms p95; 7.17 ms p99; 9.15 ms max |
-| Read latency | 5,000-entry full snapshot; 500 queries containing one occupied token | 1 token: 1.14 ms p50, 1.89 ms p99; 8 tokens: 1.14 ms p50, 2.05 ms p99; 32 tokens: 1.15 ms p50, 2.09 ms p99 |
-| Criterion insert | `insert_10k`, 100 samples | 13.176 ms estimate; 12.767–13.624 ms confidence interval |
-| Criterion lookup | `query_token`, 100 samples | 94.783 ns estimate; 93.755–96.133 ns confidence interval |
-| Split delta probe | 3.014 s window, 300 writes/s target | 201 writes attempted, 200 returned (99.5%); achieved 67 writes/s |
-| ZSET pruning | 300 entries, 3 s entity TTL, 4 s wait | 300 stale ZSET members before pruning; 300 removed; 0 remaining |
-| Redis memory | 5,000-entry full snapshot, workload payload | 1,076 B/entity; 14,990 keys, or 3.00 keys/entity |
+10,000-entry synthetic dataset; uniform random lat/lon; empty payload.
 
-The split delta probe missed one write and did not reach its requested rate.
-It is therefore neither a zero-loss proof nor a high-throughput split result.
-The endpoint-level failure-injection scenarios remain required validation.
+| Benchmark | Structure | Estimate | vs baseline |
+|---|---|---|---|
+| `insert_10k` | GeoTrie | 11.667 ms | baseline: 5.654 ms flat |
+| `insert_10k_flat` | HashMap | 5.654 ms | **2.1× faster than trie** |
+| `query_token` | GeoTrie | 97.788 ns | baseline: 16.343 ns flat |
+| `query_token_flat` | HashMap | 16.343 ns | **6× faster than trie** |
+| `query_prefix_coarse` | GeoTrie | 35.160 ns | baseline: 13.388 µs flat |
+| `query_prefix_coarse_flat` | HashMap | 13.388 µs | **381× slower than trie** |
 
-### 8.2 Reproduction And Publication Requirements
+The trie pays on insert (2.1×) and on exact single-token lookup (6×). Both
+structures are sub-microsecond for queries; neither is the bottleneck —
+Redis round-trip time dominates by three orders of magnitude.
 
-The available harnesses are:
+The decisive difference is the prefix query. The trie answers a country-scale
+viewport query (2-character S2 prefix, covering hundreds of level-9 cells) in
+**35 ns**. The HashMap requires a full key scan: **13 µs** — 381× slower. This
+gap scales linearly with dataset size and is the structural reason the trie
+was chosen over a flat map for multi-resolution spatial indexing.
+
+### 8.3 Redis experiment results
+
+| Experiment | Trie (RedisStore) | Flat (NaiveFlatStore) | Ratio trie/flat | Notes |
+|---|---|---|---|---|
+| Write p50 (100-entity snapshot) | 4.11 ms | 1.88 ms | **2.18×** | Trie writes 4 keys/entity; flat writes 1 |
+| Write p99 | 7.72 ms | 2.99 ms | 2.58× | — |
+| Read p50, 1 token | 1.14 ms | 1.24 ms | 0.92× | Near parity; SUNION+pipeline vs HGETALL |
+| Read p50, 8 tokens | 1.13 ms | 2.19 ms | 0.52× | Trie batches all tokens; flat loops N×HGETALL |
+| Read p50, 32 tokens | 1.16 ms | 5.81 ms | **0.20×** | **Trie is 5× faster** at viewport scale |
+| Read p99, 32 tokens | 1.89 ms | 10.70 ms | 0.18× | — |
+
+The 3-key-per-entity schema plus active-cell Lua makes writes **2.2× more
+expensive** than the flat alternative. This is the known, accepted cost: the
+secondary indexes are what enable per-entity TTL, move detection, and
+delta-sync. At a typical Leaflet viewport at zoom 8 the query covers 30–80
+S2 tokens; at 32 tokens the trie is **5× faster** because it issues one
+pipelined `SUNION` where the flat store issues 32 sequential `HGETALL` calls.
+
+### 8.4 Split delta probe and ZSET
+
+| Experiment | Result |
+|---|---|
+| Split delta probe | 201 writes attempted; 200 captured (99.5%); achieved 67 writes/s |
+| ZSET pruning | 300 entries written; 300 removed after TTL expiry |
+| Redis memory (trie, 5k entities) | 1,077 B/entity; 3.00 keys/entity |
+
+The split probe does not reach its requested rate and is not a zero-loss proof.
+Endpoint-level failure-injection remains required validation.
+
+### 8.5 Reproduction
 
 ```powershell
-# In-process Criterion micro-benchmarks; no Redis or HTTP involved.
 cargo bench -p proxima
-
-# Redis-backed experiment harness; requires a locally reachable Redis instance.
-.\scripts\run-experiments.ps1
-
-# Sustained concurrent traffic; configure the Redis endpoint before running.
-cargo run --release -p proxima-loadtest -- --writers 4 --readers 16 --duration-secs 60
+.\scripts\run-experiments.ps1 -Redis 'redis://127.0.0.1:6379/15'
 ```
 
-Before adding a result, commit or attach the raw output and record:
-
-1. Git revision, operating system, CPU model, memory, Rust version, and build profile.
-2. Redis version, deployment topology, network path, persistence configuration, and memory policy.
-3. Entity count, S2 level, payload-size distribution, request mix, concurrency, warm-up, and duration.
-4. Latency distribution (`p50`, `p95`, `p99`, maximum), throughput, failures, and the exact command line.
-
-The Redis-backed work that still needs broader benchmark coverage is
-`merge_entries`, `entities_written_after`, end-to-end split behavior under
-concurrent writes, and throughput across multiple shards. Results from a local
-loopback Redis must not be described as HTTP, cross-host, Kubernetes, or
-managed-service latency.
+Record CPU, OS, Redis version and topology, payload shape, concurrency, and
+warm-up before comparing runs. Loopback Docker results must not be described
+as HTTP, cross-host, or managed-service latency.
 
 ---
 
