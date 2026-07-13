@@ -181,7 +181,9 @@ fn canonical_json(value: &serde_json::Value) -> String {
         serde_json::Value::Null
         | serde_json::Value::Bool(_)
         | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => serde_json::to_string(value).expect("JSON value serializes"),
+        | serde_json::Value::String(_) => {
+            serde_json::to_string(value).expect("JSON value serializes")
+        }
         serde_json::Value::Array(values) => format!(
             "[{}]",
             values

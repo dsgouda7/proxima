@@ -186,7 +186,10 @@ fn json_identity_is_canonical_and_queryable() {
         -0.1,
         json!({"reading": 43}),
     );
-    assert_eq!(first.id, second.id, "object field order must not change identity");
+    assert_eq!(
+        first.id, second.id,
+        "object field order must not change identity"
+    );
 
     let mut trie = GeoTrie::new(9);
     trie.insert(first);
