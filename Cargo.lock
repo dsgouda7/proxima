@@ -939,6 +939,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "geo-redis"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "hdrhistogram",
+ "redis",
+ "s2",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1929,26 +1944,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxima"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "hdrhistogram",
- "redis",
- "s2",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "proxima-cluster-test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "proxima",
+ "geo-redis",
  "rand 0.8.6",
  "redis",
  "reqwest",
@@ -1966,7 +1966,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "dotenvy",
- "proxima",
+ "geo-redis",
  "reqwest",
  "rusqlite",
  "s2",
@@ -1984,8 +1984,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "geo-redis",
  "hdrhistogram",
- "proxima",
  "rand 0.8.6",
  "redis",
  "s2",
@@ -2003,8 +2003,8 @@ dependencies = [
  "axum 0.7.9",
  "base64 0.22.1",
  "dotenvy",
+ "geo-redis",
  "prost",
- "proxima",
  "rand 0.8.6",
  "redis",
  "reqwest",
@@ -2026,9 +2026,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "geo-redis",
  "hdrhistogram",
  "prost",
- "proxima",
  "rand 0.8.6",
  "redis",
  "s2",
@@ -2044,8 +2044,8 @@ dependencies = [
  "anyhow",
  "clap",
  "dotenvy",
+ "geo-redis",
  "hdrhistogram",
- "proxima",
  "rand 0.8.6",
  "redis",
  "s2",
@@ -2060,7 +2060,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "dotenvy",
- "proxima",
+ "geo-redis",
  "reqwest",
  "serde",
  "serde_json",
@@ -2079,7 +2079,7 @@ dependencies = [
  "dotenvy",
  "flate2",
  "futures-util",
- "proxima",
+ "geo-redis",
  "reqwest",
  "rusqlite",
  "s2",

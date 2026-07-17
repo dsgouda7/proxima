@@ -191,7 +191,7 @@ Range assignments use a Redis CAS lock (`SET NX EX 120`) which prevents two node
 
 ## 6. API Reference
 
-### Library (`proxima` crate)
+### Library (`geo-redis` crate)
 
 ```rust
 // Core trait — implement for mocking in tests
