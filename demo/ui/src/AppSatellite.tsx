@@ -109,7 +109,7 @@ function MetricsPanel({ metrics }: { metrics: SatelliteMetrics | null }) {
       <div style={{ marginBottom: '12px', fontSize: '12px', color: '#666' }}>Last Update: {new Date(metrics.lastUpdate).toLocaleString()}</div>
       <strong>Total: {metrics.totalCount} satellites</strong>
       <div style={{ fontSize: '12px', marginTop: '12px' }}>
-        {metrics.categories.map(c => (
+        {(metrics.categories ?? []).map(c => (
           <div key={c.category} style={{ marginBottom: '4px' }}>
             <span style={{ color: getCategoryColor(c.category) }}>●</span> {getCategoryLabel(c.category)}: <strong>{c.count}</strong>
           </div>

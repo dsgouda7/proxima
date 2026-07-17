@@ -46,6 +46,8 @@ cd demo/ui && npm run dev:radio     # → http://localhost:5176
 - **Leaf marker (zoom ≥ 8)** — glowing indigo border indicates it is interactive. Click to open the station flyout.
 - **Flyout** — scrollable list sorted by community votes; search by name, genre, or country; one ▶ / ⏹ per station; playing a new stream auto-stops the previous one.
 
+![Radio Explorer — 12 500+ stations clustered by S2 cell, playable in-browser](https://raw.githubusercontent.com/dsgouda7/proxima/main/docs/screenshots/demo-radio.png)
+
 ---
 
 ### ✈ Live Aircraft Tracker — 11 000+ aircraft, sub-second regional queries
@@ -58,6 +60,8 @@ Polls [OpenSky Network](https://opensky-network.org) every 30 s and stores posit
 # → http://localhost:5173
 ```
 
+![Aircraft Tracker — 7 000+ live flights indexed by S2 trie, altitude-coded by colour](https://raw.githubusercontent.com/dsgouda7/proxima/main/docs/screenshots/demo-aircraft.png)
+
 ---
 
 ### 🌦 Live Weather — 5 000 METAR stations, streaming drill-down
@@ -68,6 +72,40 @@ Streams live METAR observations from [aviationweather.gov](https://aviationweath
 cargo run -p proxima-weather        # → http://localhost:3000 (or $SERVER_PORT)
 cd demo/ui && npm run dev:weather   # → http://localhost:5174
 ```
+
+![Live Weather — METAR clusters colour-coded by temperature; individual station drill-down at zoom 10+](https://raw.githubusercontent.com/dsgouda7/proxima/main/docs/screenshots/demo-weather.png)
+
+---
+
+### 🛰 Satellite Tracker — ISS + 200 satellites, day/night terminator
+
+Tracks the ISS and 200 additional satellites via the .NET gRPC backend. Satellites are colour-coded by category (communication, weather, navigation, earth-observation) and overlaid on a real-time day/night terminator line.
+
+```bash
+# Start the .NET satellite/earthquake backend
+cd demo/earthquake-server && dotnet run   # → http://localhost:3003
+
+# Start the UI
+cd demo/ui && npm run dev:earthquake      # → http://localhost:5175/index.earthquake.html
+```
+
+![Satellite Tracker — 201 satellites with day/night terminator, colour-coded by category](https://raw.githubusercontent.com/dsgouda7/proxima/main/docs/screenshots/demo-satellite.png)
+
+---
+
+### 🗺 Distributed Cluster Monitor — key distribution across geo-nodes
+
+Real-time dashboard for the 4-node geo cluster. Shows the S2 token-ring topology, per-shard key counts, split/merge controls, and a live write-rate chart. The key distribution panel below shows how many entities each shard owns — the bars rebalance automatically during a split or merge.
+
+```bash
+# Start the 4-node cluster
+docker compose -f demo/cluster-compose.yml up -d
+
+# Start the cluster UI
+cd demo/cluster-ui && npm run dev          # → http://localhost:5176
+```
+
+![Cluster Monitor — S2 token-ring topology and key distribution across 4 geo-node shards](https://raw.githubusercontent.com/dsgouda7/proxima/main/docs/screenshots/demo-cluster.png)
 
 ---
 

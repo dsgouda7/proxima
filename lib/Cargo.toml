@@ -5,6 +5,7 @@ edition     = "2021"
 description = "S2-geometry-keyed distributed geospatial trie with Redis persistence — sub-10ms near-me queries over millions of moving objects"
 repository  = "https://github.com/dsgouda7/proxima"
 license     = "MIT"
+readme      = "../README.md"
 keywords    = ["geo", "s2", "redis", "distributed", "spatial"]
 categories  = ["data-structures", "database"]
 
