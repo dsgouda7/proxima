@@ -1,11 +1,11 @@
 [package]
-name    = "proxima-loadtest"
+name    = "geo-redis-loadtest"
 version = "0.1.0"
 edition = "2021"
 description = "Production-scale load test for the geo-redis S2 trie + Redis stack"
 
 [dependencies]
-proxima       = { package = "geo-redis", path = "../../lib" }
+proxima            = { package = "geo-redis", path = "../../lib" }
 tokio         = { version = "1", features = ["full"] }
 redis         = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
 serde_json    = "1"

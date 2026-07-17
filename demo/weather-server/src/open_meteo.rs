@@ -159,7 +159,7 @@ pub async fn fetch_stations(client: &reqwest::Client) -> anyhow::Result<Vec<Weat
                 ("wind_speed_unit", "kn".to_string()),
             ])
             .timeout(std::time::Duration::from_secs(30))
-            .header("User-Agent", "proxima-weather-demo/1.0")
+            .header("User-Agent", "geo-redis-weather-demo/1.0")
             .send()
             .await?
             .json::<serde_json::Value>()

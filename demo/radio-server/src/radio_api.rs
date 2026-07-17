@@ -64,7 +64,7 @@ pub async fn fetch_stations(
 
     let stations: Vec<RadioStation> = http
         .get(&url)
-        .header("User-Agent", "proxima-radio/1.0")
+        .header("User-Agent", "geo-redis-radio/1.0")
         .send()
         .await
         .context("GET radio stations")?

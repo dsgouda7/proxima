@@ -57,7 +57,7 @@ export default function App() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: '#38bdf8', letterSpacing: 0.5 }}>
-            proxima
+            geo-redis
           </h1>
           <div style={{ fontSize: 12, color: '#475569' }}>Cluster Monitor</div>
         </div>

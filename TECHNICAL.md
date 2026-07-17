@@ -65,7 +65,7 @@ Redis storage use has not yet been published from a reproducible benchmark. The
 per-entity `entity`, `cell`, and `location` indexes are documented below, but
 their memory overhead depends on Redis encoding thresholds and workload shape.
 
-All keys are namespaced under a configurable prefix (default `proxima`):
+All keys are namespaced under a configurable prefix (default `geo-redis`):
 
 | Key pattern | Type | Content | TTL |
 |---|---|---|---|
@@ -74,7 +74,7 @@ All keys are namespaced under a configurable prefix (default `proxima`):
 | `{ns}:location:{id}` | STRING | current cell token | `entity_ttl_secs` |
 | `{ns}:written_at` | ZSET | score=ms, member=id | none (pruned by `prune_written_at`) |
 | `{ns}:active_cells` | SET | all occupied cell tokens | `entity_ttl_secs` |
-| `/proxima/{ns}/range-claims/{prefix}` | etcd key | durable range owner | released by an explicit merge |
+| `/geo-redis/{ns}/range-claims/{prefix}` | etcd key | durable range owner | released by an explicit merge |
 
 The `written_at` sorted set is the only key without a TTL — it is pruned periodically by `prune_written_at()` which removes members whose backing entity key has expired. In steady state its size equals the live entity count.
 
@@ -205,7 +205,7 @@ pub trait GeoStore: Send + Sync {
 }
 
 // Concrete Redis implementation
-RedisStore::new(redis_url, metrics)            // default namespace "proxima"
+RedisStore::new(redis_url, metrics)            // default namespace "geo-redis"
     .with_namespace("tenant-acme")             // multi-tenant isolation
     .with_config(url, metrics, ttl_secs)       // explicit TTL
 
@@ -255,28 +255,28 @@ The `Metrics` struct (per `RedisStore` instance) now uses **HDR histograms** bac
 | `read_p50/p95/p99/p99.9_us` | histogram | Read latency percentiles (µs) |
 | `read_max_us` | gauge | Max read latency observed |
 
-The geo-node exposes these plus Redis `DBSIZE` and `INFO memory` at `GET /metrics/prom` in Prometheus text format under the `proxima_*` namespace.
+The geo-node exposes these plus Redis `DBSIZE` and `INFO memory` at `GET /metrics/prom` in Prometheus text format under the `geo-redis_*` namespace.
 
 ### 7.2 Additional metrics to add for production
 
 **Split/bootstrap duration**    // total split time
-proxima_bootstrap_duration_ms{node_id}                // snapshot + delta-sync time
-proxima_delta_sync_entries{node_id}                   // entries in last delta-sync
-proxima_snapshot_transfer_ms{node_id}                 // phase 2 transfer time
+geo-redis_bootstrap_duration_ms{node_id}                // snapshot + delta-sync time
+geo-redis_delta_sync_entries{node_id}                   // entries in last delta-sync
+geo-redis_snapshot_transfer_ms{node_id}                 // phase 2 transfer time
 ```
 
 **ZSET health**
 
 ```
-proxima_written_at_zset_size{node_id}   // live ZSET cardinality (should ≈ key_count)
-proxima_prune_removed_total{node_id}    // cumulative entries pruned (should stay near 0)
+geo-redis_written_at_zset_size{node_id}   // live ZSET cardinality (should ≈ key_count)
+geo-redis_prune_removed_total{node_id}    // cumulative entries pruned (should stay near 0)
 ```
 
 **S2-level breakdown**
 
 ```
-proxima_query_cells{node_id, s2_level}  // avg cells per viewport query
-proxima_entities_per_cell{node_id}      // distribution: how many entities per occupied cell
+geo-redis_query_cells{node_id, s2_level}  // avg cells per viewport query
+geo-redis_entities_per_cell{node_id}      // distribution: how many entities per occupied cell
 ```
 
 ### 7.3 Roll-up: cluster-wide view
@@ -285,34 +285,34 @@ Scrape all geo-nodes from a single Prometheus instance. Aggregate labels to get 
 
 ```promql
 # Total write QPS across all shards
-sum(rate(proxima_write_count[1m]))
+sum(rate(geo-redis_write_count[1m]))
 
 # p99 read latency worst shard
-max(proxima_query_latency_us{quantile="0.99"})
+max(geo-redis_query_latency_us{quantile="0.99"})
 
 # Total entities in cluster
-sum(proxima_key_count)
+sum(geo-redis_key_count)
 
 # ZSET drift (writes at-risk of loss if node crashes)
-sum(proxima_written_at_zset_size) - sum(proxima_key_count)
+sum(geo-redis_written_at_zset_size) - sum(geo-redis_key_count)
 
 # Split frequency over 24h
-increase(proxima_split_duration_ms_count[24h])
+increase(geo-redis_split_duration_ms_count[24h])
 ```
 
 ### 7.4 Drill-in: per-shard / per-prefix analysis
 
 ```promql
 # Single shard latency over time
-proxima_query_latency_us{quantile="0.99", node_id="node-0"}
+geo-redis_query_latency_us{quantile="0.99", node_id="node-0"}
 
 # Bootstrap catch-up vs. write rate (validate the W×Δt bound)
-proxima_delta_sync_entries{node_id="node-1"} /
-  rate(proxima_write_count{node_id="node-0"}[30s])
+geo-redis_delta_sync_entries{node_id="node-1"} /
+  rate(geo-redis_write_count{node_id="node-0"}[30s])
 # Should equal Δt (snapshot transfer duration)
 
 # Shard balance: flag shards with > 2× average key count
-proxima_key_count / avg(proxima_key_count)
+geo-redis_key_count / avg(geo-redis_key_count)
 ```
 
 ### 7.5 Recommended dashboard layout
@@ -482,7 +482,7 @@ Reproduce (requires a local Redis; the Redis backend is skipped with a warning
 if none is reachable):
 
 ```powershell
-cargo run -p proxima-grpc-bench --release -- --entities 40000 --queries 1500
+cargo run -p geo-redis-grpc-bench --release -- --entities 40000 --queries 1500
 ```
 
 ### 8.6 Reproduction

@@ -3,8 +3,8 @@
 # Starts ALL demo components in one command:
 #
 #  Redis (Docker)
-#  ├── proxima-demo      :3000  OpenSky aircraft tracker
-#  └── proxima-weather   :3001  Live METAR weather (streams every 60 s)
+#  ├── geo-redis-demo      :3000  OpenSky aircraft tracker
+#  └── geo-redis-weather   :3001  Live METAR weather (streams every 60 s)
 #
 #  Vite dev servers
 #  ├── :5173  OpenSky tracker UI
@@ -71,7 +71,7 @@ foreach ($dir in @("demo/ui", "demo/cluster-ui")) {
 # ── Build Rust binaries ───────────────────────────────────────────────────
 if (-not $SkipBuild) {
     Write-Host "Building backends (first build ~60s)..." -ForegroundColor Yellow
-    cargo build --release -p proxima-demo -p proxima-weather
+    cargo build --release -p geo-redis-demo -p geo-redis-weather
     if ($LASTEXITCODE -ne 0) { Write-Error "Cargo build failed"; exit 1 }
 }
 
@@ -83,17 +83,17 @@ Get-Content .env | Where-Object { $_ -match "^\s*[^#]\S+=\S" } | ForEach-Object 
 
 # ── OpenSky demo server — :3000 ───────────────────────────────────────────
 Write-Host "Starting OpenSky server    → :3000" -ForegroundColor Yellow
-$env:SERVER_PORT = "3000"; $env:SQLITE_PATH = "proxima.db"
+$env:SERVER_PORT = "3000"; $env:SQLITE_PATH = "geo-redis.db"
 $env:REDIS_URL   = if ($env:REDIS_URL) { $env:REDIS_URL } else { "redis://127.0.0.1:6379" }
-$p0 = Start-Process -FilePath ".\target\release\proxima-demo.exe" `
+$p0 = Start-Process -FilePath ".\target\release\geo-redis-demo.exe" `
     -RedirectStandardOutput ".\target\demo-stdout.log" `
     -RedirectStandardError  ".\target\demo-stderr.log" -PassThru -NoNewWindow
 
 # ── Weather server — :3001 ────────────────────────────────────────────────
 Write-Host "Starting Weather server    → :3001" -ForegroundColor Yellow
-$env:SERVER_PORT = "3001"; $env:SQLITE_PATH = "proxima-weather.db"
+$env:SERVER_PORT = "3001"; $env:SQLITE_PATH = "geo-redis-weather.db"
 $env:REDIS_URL   = "redis://127.0.0.1:6379/1"
-$p1 = Start-Process -FilePath ".\target\release\proxima-weather.exe" `
+$p1 = Start-Process -FilePath ".\target\release\geo-redis-weather.exe" `
     -RedirectStandardOutput ".\target\weather-stdout.log" `
     -RedirectStandardError  ".\target\weather-stderr.log" -PassThru -NoNewWindow
 

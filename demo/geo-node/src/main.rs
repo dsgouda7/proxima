@@ -63,7 +63,7 @@ struct Config {
     /// If non-empty, all write endpoints require `X-API-Key: <value>`.
     /// Leave empty in dev. Set via API_KEY env var in production.
     api_key: String,
-    /// Redis key namespace prefix. Defaults to "proxima".
+    /// Redis key namespace prefix. Defaults to "geo-redis".
     /// Override via KEY_NAMESPACE env var for multi-tenant isolation
     /// (multiple logical datasets on the same Redis instance).
     key_namespace: String,
@@ -108,7 +108,7 @@ impl Config {
             snapshot_interval_secs: env_parse("SNAPSHOT_INTERVAL_SECS", 300u64),
             entity_ttl_secs: env_parse("ENTITY_TTL_SECS", 120u64),
             api_key: env("API_KEY", ""),
-            key_namespace: env("KEY_NAMESPACE", "proxima"),
+            key_namespace: env("KEY_NAMESPACE", "geo-redis"),
             redis_cluster_urls: env("REDIS_CLUSTER_URLS", "")
                 .split(',')
                 .map(str::trim)
@@ -1659,22 +1659,22 @@ async fn route_metrics_prometheus(State(s): State<AppState>) -> (HeaderMap, Stri
     let prefix = format!("[{}, {})", my.prefix_start, my.prefix_end);
 
     let mut out = format!(
-        "# HELP proxima_key_count Entities in shard\n\
-         # TYPE proxima_key_count gauge\n\
-         proxima_key_count{{node_id=\"{node}\",prefix=\"{prefix}\"}} {}\n\
-         # HELP proxima_mem_bytes Redis memory used\n\
-         # TYPE proxima_mem_bytes gauge\n\
-         proxima_mem_bytes{{node_id=\"{node}\"}} {}\n",
+        "# HELP geo-redis_key_count Entities in shard\n\
+         # TYPE geo-redis_key_count gauge\n\
+         geo-redis_key_count{{node_id=\"{node}\",prefix=\"{prefix}\"}} {}\n\
+         # HELP geo-redis_mem_bytes Redis memory used\n\
+         # TYPE geo-redis_mem_bytes gauge\n\
+         geo-redis_mem_bytes{{node_id=\"{node}\"}} {}\n",
         my.key_count, my.mem_bytes
     );
     if let Some((count, dur_ms, ts)) = snap {
         out.push_str(&format!(
-            "# TYPE proxima_snapshot_entities gauge\n\
-             proxima_snapshot_entities{{node_id=\"{node}\"}} {count}\n\
-             # TYPE proxima_snapshot_duration_ms gauge\n\
-             proxima_snapshot_duration_ms{{node_id=\"{node}\"}} {dur_ms}\n\
-             # TYPE proxima_snapshot_ts gauge\n\
-             proxima_snapshot_ts{{node_id=\"{node}\"}} {ts}\n"
+            "# TYPE geo-redis_snapshot_entities gauge\n\
+             geo-redis_snapshot_entities{{node_id=\"{node}\"}} {count}\n\
+             # TYPE geo-redis_snapshot_duration_ms gauge\n\
+             geo-redis_snapshot_duration_ms{{node_id=\"{node}\"}} {dur_ms}\n\
+             # TYPE geo-redis_snapshot_ts gauge\n\
+             geo-redis_snapshot_ts{{node_id=\"{node}\"}} {ts}\n"
         ));
     }
     let mut headers = HeaderMap::new();

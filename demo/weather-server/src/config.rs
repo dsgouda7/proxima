@@ -7,7 +7,7 @@ pub struct Config {
     pub s2_level: u8,
     pub sqlite_path: String,
     pub entity_ttl_secs: u64,
-    /// Redis key namespace prefix. Defaults to "proxima-weather" so this
+    /// Redis key namespace prefix. Defaults to "geo-redis-weather" so this
     /// app's keys never collide with other demos (aircraft tracker, geo-node
     /// cluster) that may share the same Redis instance. Override via
     /// KEY_NAMESPACE.
@@ -30,9 +30,9 @@ impl Config {
             server_port: env_parse("SERVER_PORT", 3001),
             poll_interval_secs: env_parse("WEATHER_POLL_SECS", 60u64),
             s2_level: env_parse("S2_LEVEL", 9),
-            sqlite_path: env("SQLITE_PATH", "proxima-weather.db"),
+            sqlite_path: env("SQLITE_PATH", "geo-redis-weather.db"),
             entity_ttl_secs: env_parse("ENTITY_TTL_SECS", proxima::store::DEFAULT_ENTITY_TTL_SECS),
-            key_namespace: env("KEY_NAMESPACE", "proxima-weather"),
+            key_namespace: env("KEY_NAMESPACE", "geo-redis-weather"),
             stream_rate_ms: env_parse("STREAM_RATE_MS", 5u64),
             max_clusters: env_parse("MAX_CLUSTERS", 100usize),
             cluster_level: std::env::var("CLUSTER_LEVEL")

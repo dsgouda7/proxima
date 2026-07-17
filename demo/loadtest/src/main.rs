@@ -1,4 +1,4 @@
-//! proxima-loadtest
+//! geo-redis-loadtest
 //!
 //! Fires parallel Tokio tasks to simulate production-scale Redis load:
 //!   - N writer tasks each pipeline-writing a full aircraft batch every cycle
@@ -7,8 +7,8 @@
 //! Latencies are captured in HDR histograms (p50/p95/p99/p99.9/max).
 //!
 //! Usage:
-//!   cargo run --release -p proxima-loadtest -- --help
-//!   cargo run --release -p proxima-loadtest -- --writers 4 --readers 16 --duration-secs 60
+//!   cargo run --release -p geo-redis-loadtest -- --help
+//!   cargo run --release -p geo-redis-loadtest -- --writers 4 --readers 16 --duration-secs 60
 
 use std::{
     f64::consts::PI,
@@ -33,7 +33,7 @@ use serde_json::json;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "proxima-loadtest",
+    name = "geo-redis-loadtest",
     about = "Production-scale load test: parallel writers + readers against a live Redis"
 )]
 struct Args {
@@ -327,7 +327,7 @@ async fn sharded_writer_task(
     s2_level: u8,
 ) {
     let mut rng = StdRng::from_entropy();
-    let prefix = "proxima";
+    let prefix = "geo-redis";
     const TTL: u64 = 120;
     const EXPIRE: i64 = 120;
 
@@ -404,7 +404,7 @@ async fn sharded_reader_task(
     s2_level: u8,
 ) {
     let mut rng = StdRng::from_entropy();
-    let prefix = "proxima";
+    let prefix = "geo-redis";
 
     while !stop.load(Relaxed) {
         let tokens = random_viewport_tokens(&mut rng, s2_level);
@@ -451,7 +451,7 @@ async fn writer_task(
     s2_level: u8,
 ) {
     let mut rng = StdRng::from_entropy();
-    let prefix = "proxima";
+    let prefix = "geo-redis";
     const TTL: u64 = 120;
     const EXPIRE: i64 = 120;
 
@@ -512,7 +512,7 @@ async fn reader_task(
     s2_level: u8,
 ) {
     let mut rng = StdRng::from_entropy();
-    let prefix = "proxima";
+    let prefix = "geo-redis";
 
     while !stop.load(Relaxed) {
         let tokens = random_viewport_tokens(&mut rng, s2_level);
@@ -584,7 +584,7 @@ fn random_viewport_tokens(rng: &mut impl Rng, s2_level: u8) -> Vec<String> {
 fn print_header(a: &Args, shards: &[ShardSpec]) {
     println!();
     println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║             PROXIMA  PRODUCTION  LOAD  TEST             ║");
+    println!("║             geo-redis  PRODUCTION  LOAD  TEST             ║");
     println!("╚══════════════════════════════════════════════════════════╝");
     println!();
     if shards.is_empty() {

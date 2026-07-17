@@ -1,5 +1,5 @@
 [package]
-name        = "proxima-geo-node"
+name        = "geo-redis-geo-node"
 version     = "0.1.0"
 edition     = "2021"
 description = "Geo-sharded Redis cluster node with SWIM-lite gossip and operator-triggered split/merge"

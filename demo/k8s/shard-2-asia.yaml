@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: geo-node-2
-  namespace: geo-redis
+  namespace: geo-redisis
   labels: { app: geo-node, shard: "2", region: asia-pacific }
 spec:
   replicas: 1
@@ -36,7 +36,7 @@ spec:
             - name: shard-data
               mountPath: /data
         - name: geo-node
-          image: proxima-geo-node:latest
+          image: geo-redis-geo-node:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 4002
@@ -51,17 +51,17 @@ spec:
             - { name: REDIS_URL,    value: "redis://localhost:6379" }
             # Mode B — Managed Redis (uncomment + remove sidecar container above)
             # - name: REDIS_URL
-            #   valueFrom: { secretKeyRef: { name: geo-redis-redis-shard-2, key: REDIS_URL } }
+            #   valueFrom: { secretKeyRef: { name: geo-redisis-redis-shard-2, key: REDIS_URL } }
             # - name: API_KEY
-            #   valueFrom: { secretKeyRef: { name: geo-redis-redis-shard-2, key: API_KEY } }
-            - { name: PREFIX_START, valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: GEO_NODE_2_PREFIX_START } } }
-            - { name: PREFIX_END,   valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: GEO_NODE_2_PREFIX_END   } } }
+            #   valueFrom: { secretKeyRef: { name: geo-redisis-redis-shard-2, key: API_KEY } }
+            - { name: PREFIX_START, valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: GEO_NODE_2_PREFIX_START } } }
+            - { name: PREFIX_END,   valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: GEO_NODE_2_PREFIX_END   } } }
             - { name: SEED_PEERS,   value: "geo-node-0:4000,geo-node-1:4001" }
-            - { name: S2_LEVEL,     valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: S2_LEVEL } } }
-            - { name: METADATA_ETCD_ENDPOINTS, valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: METADATA_ETCD_ENDPOINTS } } }
+            - { name: S2_LEVEL,     valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: S2_LEVEL } } }
+            - { name: METADATA_ETCD_ENDPOINTS, valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: METADATA_ETCD_ENDPOINTS } } }
             - { name: SNAPSHOT_PATH, value: "/data/snapshot.db" }
-            - { name: SPLIT_THRESHOLD_KEYS,      valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: SPLIT_THRESHOLD_KEYS, optional: "true" } } }
-            - { name: MERGE_THRESHOLD_KEYS,      valueFrom: { configMapKeyRef: { name: geo-redis-ring, key: MERGE_THRESHOLD_KEYS, optional: "true" } } }
+            - { name: SPLIT_THRESHOLD_KEYS,      valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: SPLIT_THRESHOLD_KEYS, optional: "true" } } }
+            - { name: MERGE_THRESHOLD_KEYS,      valueFrom: { configMapKeyRef: { name: geo-redisis-ring, key: MERGE_THRESHOLD_KEYS, optional: "true" } } }
             - { name: RUST_LOG,     value: "info" }
           resources:
             requests: { memory: "128Mi", cpu: "100m" }
@@ -87,7 +87,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: geo-node-2
-  namespace: geo-redis
+  namespace: geo-redisis
 spec:
   selector: { app: geo-node, shard: "2" }
   ports:

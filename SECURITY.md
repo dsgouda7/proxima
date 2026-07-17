@@ -13,7 +13,7 @@ geo-redis is pre-1.0 and does not yet make backward-compatibility guarantees bet
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email **security@proxima-geo.io** (or the repository owner's contact in the GitHub profile)
+Email **security@geo-redis-geo.io** (or the repository owner's contact in the GitHub profile)
 with the subject line `[geo-redis] Security vulnerability report`. Include:
 
 - A description of the vulnerability and its potential impact

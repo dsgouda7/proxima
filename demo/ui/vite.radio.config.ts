@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// proxima Radio Explorer — proxies to proxima-radio on :3002
+// geo-redis Radio Explorer — proxies to geo-redis-radio on :3002
 export default defineConfig({
   plugins: [
     react(),

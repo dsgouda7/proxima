@@ -10,7 +10,7 @@ pub struct Config {
     /// Set to ~10× your poll interval; entity→cell cleanup is eager so this
     /// only fires for entities that vanish from the feed entirely.
     pub entity_ttl_secs: u64,
-    /// Redis key namespace prefix. Defaults to "proxima-demo" so this app's
+    /// Redis key namespace prefix. Defaults to "geo-redis-demo" so this app's
     /// keys never collide with other demos (weather, geo-node cluster) that
     /// may share the same Redis instance. Override via KEY_NAMESPACE.
     pub key_namespace: String,
@@ -24,9 +24,9 @@ impl Config {
             server_port: env_parse("SERVER_PORT", 3000),
             poll_interval_secs: env_parse("POLL_INTERVAL_SECS", 30),
             s2_level: env_parse("S2_LEVEL", 9),
-            sqlite_path: env("SQLITE_PATH", "proxima.db"),
+            sqlite_path: env("SQLITE_PATH", "geo-redis.db"),
             entity_ttl_secs: env_parse("ENTITY_TTL_SECS", proxima::store::DEFAULT_ENTITY_TTL_SECS),
-            key_namespace: env("KEY_NAMESPACE", "proxima-demo"),
+            key_namespace: env("KEY_NAMESPACE", "geo-redis-demo"),
         }
     }
 }

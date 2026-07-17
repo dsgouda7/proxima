@@ -99,7 +99,7 @@ impl RedisStore {
         Ok(Self {
             client: RedisClientKind::Single(redis::Client::open(redis_url)?),
             metrics,
-            key_prefix: "proxima".into(),
+            key_prefix: "geo-redis".into(),
             entity_ttl_secs,
         })
     }
@@ -125,12 +125,12 @@ impl RedisStore {
         Ok(Self {
             client: RedisClientKind::Cluster(client),
             metrics,
-            key_prefix: "proxima".into(),
+            key_prefix: "geo-redis".into(),
             entity_ttl_secs,
         })
     }
 
-    /// Override the Redis key namespace (default: `"proxima"`).
+    /// Override the Redis key namespace (default: `"geo-redis"`).
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.key_prefix = namespace.into();
         self
@@ -154,7 +154,7 @@ impl RedisStore {
     // in cluster mode.
     //
     // Key format:  {<namespace>}:<type>:<identifier>
-    // Example:     {proxima}:cell:487a3
+    // Example:     {geo-redis}:cell:487a3
 
     /// Entity payload key.  `{ns}:entity:{id}`
     pub fn k_entity(&self, id: &str) -> String {
@@ -232,7 +232,7 @@ impl RedisStore {
         let active_key = self.k_active_cells();
         let written_at_key = self.k_written_at();
         // Lua receives the full cell-key prefix (with hash tag) so it can construct
-        // keys like `{proxima}:cell:{token}` without reformatting.
+        // keys like `{geo-redis}:cell:{token}` without reformatting.
         let cell_pfx = format!("{{{}}}:cell:", self.key_prefix);
 
         let mut new_cells: HashSet<String> = HashSet::with_capacity(entries.len() / 4);
@@ -498,7 +498,7 @@ impl RedisStore {
 /// inject an in-memory mock in unit tests without requiring a running Redis:
 ///
 /// ```ignore
-/// use proxima::{GeoStore, GeoEntry, GeoTrie, Metrics, Result};
+/// use geo-redis::{GeoStore, GeoEntry, GeoTrie, Metrics, Result};
 /// use std::sync::Arc;
 ///
 /// struct MockStore;

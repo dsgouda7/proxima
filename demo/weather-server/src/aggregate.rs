@@ -16,7 +16,7 @@ use proxima::GeoTrie;
 ///      - count     : number of member stations
 ///
 /// The resulting cluster IDs are `"wx:{s2_token}"` — ordinary strings that
-/// the proxima lib handles without any changes (GeoEntry.id is already String).
+/// the geo-redis lib handles without any changes (GeoEntry.id is already String).
 use std::collections::HashMap;
 
 /// One aggregated weather cluster ready to be inserted into the georedis trie.

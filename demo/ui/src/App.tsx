@@ -117,8 +117,8 @@ export default function App() {
   // Keep the browser-tab title in sync with the detected data mode.
   useEffect(() => {
     document.title = isWeather
-      ? 'proxima — Live Weather Stations'
-      : 'proxima — Live Aircraft Tracker';
+      ? 'geo-redis — Live Weather Stations'
+      : 'geo-redis — Live Aircraft Tracker';
   }, [isWeather]);
 
   // Metrics poller (every 10s)
@@ -160,7 +160,7 @@ export default function App() {
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#020617' }}>
       <header style={{ padding: '7px 16px', background: 'linear-gradient(90deg,#0c1528,#0f172a)', borderBottom: '1px solid rgba(56,189,248,0.15)', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, boxShadow: '0 2px 12px rgba(0,0,0,0.5)' }}>
         <span style={{ fontSize: 20 }}>{isWeather ? '🌦️' : '✈'}</span>
-        <strong style={{ fontSize: '1rem', color: '#38bdf8', letterSpacing: 0.5 }}>proxima</strong>
+        <strong style={{ fontSize: '1rem', color: '#38bdf8', letterSpacing: 0.5 }}>geo-redis</strong>
         <span style={{ color: '#475569', fontSize: 12 }}>·</span>
         <span style={{ color: '#94a3b8', fontSize: 12 }}>{isWeather ? 'Live Weather Stations' : 'Live Aircraft Tracker'}</span>
         <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: '#64748b', maxWidth: 500, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{status}</span>

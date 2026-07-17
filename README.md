@@ -35,7 +35,7 @@ The most striking demonstration of geo-redis's storage efficiency: **12 500+ geo
 
 ```bash
 # Start the radio API (no Redis needed)
-cargo run -p proxima-radio          # → http://localhost:3002
+cargo run -p geo-redis-radio          # → http://localhost:3002
 
 # Start the UI
 cd demo/ui && npm run dev:radio     # → http://localhost:5176
@@ -69,7 +69,7 @@ Polls [OpenSky Network](https://opensky-network.org) every 30 s and stores posit
 Streams live METAR observations from [aviationweather.gov](https://aviationweather.gov) into the trie via SSE. Zoom in past level 10 to switch from S2 aggregate clusters to individual station readings with full weather metadata.
 
 ```bash
-cargo run -p proxima-weather        # → http://localhost:3000 (or $SERVER_PORT)
+cargo run -p geo-redis-weather        # → http://localhost:3000 (or $SERVER_PORT)
 cd demo/ui && npm run dev:weather   # → http://localhost:5174
 ```
 
@@ -146,14 +146,14 @@ sequenceDiagram
 
     App->>Node: POST /ingest [{id, lat, lon, payload}]
     Node->>Node: compute S2 token
-    Node->>Redis: SET proxima:entity:{id} EX 120
-    Node->>Redis: SADD proxima:cell:{token} {id}
-    Node->>Redis: ZADD proxima:written_at {now_ms} {id}
+    Node->>Redis: SET geo-redis:entity:{id} EX 120
+    Node->>Redis: SADD geo-redis:cell:{token} {id}
+    Node->>Redis: ZADD geo-redis:written_at {now_ms} {id}
     Node-->>App: 200 OK
 
     App->>Node: GET /api/region?viewport
     Node->>Node: viewport → S2 cap covering → token list
-    Node->>Redis: SUNION proxima:cell:{t1} {t2} ... → IDs
+    Node->>Redis: SUNION geo-redis:cell:{t1} {t2} ... → IDs
     Redis-->>Node: 47 entity IDs
     Node->>Redis: Pipeline GET × 47
     Redis-->>Node: 47 JSON payloads
@@ -190,13 +190,13 @@ A viewport query covering London computes the S2 tokens for that area (`487a`, `
 
 ### Redis data model
 
-All keys live under a configurable namespace (default `proxima`). Each **shard has its own Redis instance** — keys never cross shard boundaries:
+All keys live under a configurable namespace (default `geo-redis`). Each **shard has its own Redis instance** — keys never cross shard boundaries:
 
 ```
-proxima:entity:{id}     →  SET  {json}   EX ttl    ← full entity payload
-proxima:cell:{token}    →  SADD {id...}  EXPIRE ttl ← spatial index
-proxima:location:{id}   →  SET  {token}  EX ttl    ← reverse lookup: id → cell token
-proxima:written_at      →  ZSET score=ms member=id  ← write-timestamp index for delta sync
+geo-redis:entity:{id}     →  SET  {json}   EX ttl    ← full entity payload
+geo-redis:cell:{token}    →  SADD {id...}  EXPIRE ttl ← spatial index
+geo-redis:location:{id}   →  SET  {token}  EX ttl    ← reverse lookup: id → cell token
+geo-redis:written_at      →  ZSET score=ms member=id  ← write-timestamp index for delta sync
 ```
 
 The `written_at` sorted set is the only key without a TTL — it powers `/delta-sync` during shard splits and is pruned periodically by `prune_written_at()`.
@@ -262,7 +262,7 @@ flowchart LR
 ```powershell
 # Windows
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cargo run -p proxima-radio                      # API on :3002
+cargo run -p geo-redis-radio                      # API on :3002
 # new terminal:
 cd demo/ui; npm install; npm run dev:radio      # UI  on :5176
 ```
@@ -288,7 +288,7 @@ Open **http://localhost:5173** — 11,000+ live aircraft, rotating plane icons, 
 
 ```powershell
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-cargo run -p proxima-weather                    # API on :3000
+cargo run -p geo-redis-weather                    # API on :3000
 # new terminal:
 cd demo/ui; npm run dev:weather                 # UI  on :5174
 ```
@@ -314,13 +314,13 @@ All values are environment variables (copy `config/.env.example` to `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Local or managed Redis. Use `rediss://` for TLS. |
-| `SQLITE_PATH` | `proxima.db` | Path for metadata / position-history store |
+| `SQLITE_PATH` | `geo-redis.db` | Path for metadata / position-history store |
 | `S2_LEVEL` | `9` | Cell granularity — 9≈70km, 12≈2km |
 | `POLL_INTERVAL_SECS` | `30` | OpenSky poll cadence |
 | `SPLIT_THRESHOLD_KEYS` | `500000` | Recommended operator split threshold; automation is not yet implemented |
 | `SPLIT_THRESHOLD_WRITE_QPS` | `50000` | Recommended operator split threshold; automation is not yet implemented |
 | `MERGE_THRESHOLD_KEYS` | `25000` | Recommended operator merge threshold; automation is not yet implemented |
-| `RADIO_PORT` | `3002` | Port for the radio demo API (`proxima-radio`; no Redis dependency) |
+| `RADIO_PORT` | `3002` | Port for the radio demo API (`geo-redis-radio`; no Redis dependency) |
 | `RADIO_API_BASE` | `https://de1.api.radio-browser.info` | Radio Browser mirror to fetch station data from |
 | `RADIO_FETCH_LIMIT` | `50000` | Maximum geo-tagged stations to request from Radio Browser |
 | `SUSPECT_SECS` | `10` | Gossip: mark node Suspect after N silent seconds |
@@ -466,7 +466,7 @@ curl "http://localhost:4000/trace?lat=40.7&lon=-74.0"
 
 ```bash
 # Docker Desktop: enable Kubernetes first, then build the image locally.
-docker build -f demo/geo-node/Dockerfile -t proxima-geo-node:latest .
+docker build -f demo/geo-node/Dockerfile -t geo-redis-geo-node:latest .
 
 # Apply 3 active shards, 1 standby shard, and their gossip services.
 kubectl apply -k demo/k8s/

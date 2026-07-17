@@ -49,7 +49,7 @@ if (-not $redisUp) {
 # ── Build ─────────────────────────────────────────────────────────────────
 if (-not $SkipBuild) {
     Write-Host "Building experiment binary..." -ForegroundColor Yellow
-    cargo build --release -p proxima-experiments
+    cargo build --release -p geo-redis-experiments
     if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
 }
 

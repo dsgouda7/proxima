@@ -138,7 +138,7 @@ def fastapi_integration():
 
     @app.get("/dispatch/nearby")
     async def find_nearby_couriers(lat: float, lon: float, radius_km: float = 5):
-        # Convert radius to approximate bounding box
+        # Convert radius to apgeo-rediste bounding box
         deg = radius_km / 111.0
         result = requests.get(f"{BASE}/api/region", params={
             "s": lat - deg, "n": lat + deg,

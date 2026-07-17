@@ -171,7 +171,7 @@ export default function AppSatellite() {
       <MetricsPanel metrics={metrics} />
       <div style={{ position: 'absolute', bottom: '10px', left: '10px', backgroundColor: 'rgba(255,255,255,0.95)', color: '#1a1a1a', padding: '8px 12px', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.1)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 1000, fontSize: '12px' }}>{status}</div>
       <div style={{ position: 'absolute', top: '10px', left: '10px', backgroundColor: 'rgba(255,255,255,0.95)', color: '#1a1a1a', padding: '12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 1000 }}>
-        <h1 style={{ margin: 0, fontSize: '20px', color: '#111', fontWeight: 600 }}>proxima — Satellite Tracker</h1>
+        <h1 style={{ margin: 0, fontSize: '20px', color: '#111', fontWeight: 600 }}>geo-redis — Satellite Tracker</h1>
         <div style={{ fontSize: '13px', color: '#666', marginTop: '4px' }}>ISS + 200 satellites via gRPC</div>
       </div>
     </div>

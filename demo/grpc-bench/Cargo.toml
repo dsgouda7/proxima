@@ -1,15 +1,15 @@
 [package]
-name        = "proxima-grpc-bench"
+name        = "geo-redis-grpc-bench"
 version     = "0.1.0"
 edition     = "2021"
 description = "gRPC benchmark: naive Redis cache vs geo-redis trie-based cache, measured over the wire"
 
 [[bin]]
-name = "proxima-grpc-bench"
+name = "geo-redis-grpc-bench"
 path = "src/main.rs"
 
 [dependencies]
-proxima      = { package = "geo-redis", path = "../../lib" }
+proxima            = { package = "geo-redis", path = "../../lib" }
 tokio        = { version = "1", features = ["full"] }
 tonic        = { version = "0.11", features = ["codegen", "transport"] }
 prost        = "0.12"

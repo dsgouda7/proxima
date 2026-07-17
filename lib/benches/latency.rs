@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use proxima::{GeoEntry, GeoTrie};
+use geo-redis::{GeoEntry, GeoTrie};
 use serde_json::json;
 
 // ── Shared data helpers ───────────────────────────────────────────────────

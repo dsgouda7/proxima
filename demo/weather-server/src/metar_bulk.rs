@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// (~5 000–8 000 stations).  A single file download = no per-request rate limiting.
 ///
 /// This module downloads the file, decompresses it in-memory, and parses each row
-/// into a `BulkMETAR` struct ready to be streamed into the proxima trie.
+/// into a `BulkMETAR` struct ready to be streamed into the geo-redis trie.
 use std::io::Read;
 
 const BULK_URL: &str = "https://aviationweather.gov/data/cache/metars.cache.csv.gz";
@@ -38,7 +38,7 @@ pub async fn download_and_parse(client: &reqwest::Client) -> anyhow::Result<Vec<
     let bytes = client
         .get(BULK_URL)
         .timeout(std::time::Duration::from_secs(60))
-        .header("User-Agent", "proxima-weather-demo/1.0")
+        .header("User-Agent", "geo-redis-weather-demo/1.0")
         .send()
         .await?
         .bytes()

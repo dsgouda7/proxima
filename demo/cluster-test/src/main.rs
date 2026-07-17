@@ -1,4 +1,4 @@
-/// proxima cluster integration test
+/// geo-redis cluster integration test
 ///
 /// Tests the full shard-split lifecycle at the library level using real Redis
 /// containers (via testcontainers).  No geo-node HTTP server is needed — the
@@ -17,8 +17,8 @@
 ///   7. CONSISTENCY      — assert total key count equals expected, no duplicates
 ///
 /// Run:
-///   cargo run -p proxima-cluster-test
-///   cargo run -p proxima-cluster-test -- --verbose
+///   cargo run -p geo-redis-cluster-test
+///   cargo run -p geo-redis-cluster-test -- --verbose
 use anyhow::Result;
 use proxima::{GeoEntry, GeoTrie, Metrics, RedisStore};
 use rand::{Rng, SeedableRng};
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("proxima_cluster_test=info".parse().unwrap()),
+                .add_directive("geo-redis_cluster_test=info".parse().unwrap()),
         )
         .init();
 
@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
 
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║          proxima Cluster Integration Test                   ║");
+    println!("║          geo-redis Cluster Integration Test                   ║");
     println!("║  Phases: setup → high-load → split seed → delta-sync        ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();

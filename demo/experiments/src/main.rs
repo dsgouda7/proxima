@@ -1,4 +1,4 @@
-//! proxima — Performance Experiment Suite
+//! geo-redis — Performance Experiment Suite
 //!
 //! Runs five controlled experiments against a local Redis and prints
 //! formatted results tables:
@@ -17,8 +17,8 @@
 //! difference reveals what the richer schema costs.
 //!
 //! Usage:
-//!   cargo run --release -p proxima-experiments -- --redis redis://127.0.0.1:6379
-//!   cargo run --release -p proxima-experiments -- --skip 3,4   # skip slow experiments
+//!   cargo run --release -p geo-redis-experiments -- --redis redis://127.0.0.1:6379
+//!   cargo run --release -p geo-redis-experiments -- --skip 3,4   # skip slow experiments
 
 use std::{
     sync::Arc,
@@ -36,7 +36,7 @@ use serde_json::json;
 // ── CLI ───────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "experiments", about = "proxima performance experiment suite")]
+#[command(name = "experiments", about = "geo-redis performance experiment suite")]
 struct Args {
     /// Redis URL
     #[arg(long, default_value = "redis://127.0.0.1:6379")]
@@ -814,7 +814,7 @@ async fn main() -> Result<()> {
 
     println!();
     println!("╔═════════════════════════════════════════════════════════════════╗");
-    println!("║  proxima — Performance Experiment Suite                         ║");
+    println!("║  geo-redis — Performance Experiment Suite                         ║");
     println!("╚═════════════════════════════════════════════════════════════════╝");
     println!("  Redis:  {}", args.redis);
     println!(

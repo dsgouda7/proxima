@@ -30,7 +30,7 @@ impl EtcdRangeAuthority {
                 .map(|endpoint| endpoint.trim_end_matches('/').to_string())
                 .collect(),
             client,
-            key_prefix: format!("/proxima/{namespace}/range-claims/"),
+            key_prefix: format!("/geo-redis/{namespace}/range-claims/"),
         }
     }
 

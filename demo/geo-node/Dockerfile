@@ -29,7 +29,7 @@ RUN mkdir -p lib/src demo/geo-node/src demo/server/src demo/loadtest/src \
     echo "" > lib/src/lib.rs
 
 # Cache dependencies only
-RUN cargo build --release -p proxima-geo-node 2>/dev/null; true
+RUN cargo build --release -p geo-redis-geo-node 2>/dev/null; true
 
 # Copy real source
 COPY lib/ lib/
@@ -42,8 +42,8 @@ RUN grep -q 'cmd("ZADD")' lib/src/store.rs && \
 
 # Remove pre-built artifacts for our own crates so Cargo always recompiles
 # them from the current source, avoiding stale-cache bugs.
-RUN cargo clean -p proxima -p proxima-geo-node && \
-    cargo build --release -p proxima-geo-node
+RUN cargo clean -p geo-redis -p geo-redis-geo-node && \
+    cargo build --release -p geo-redis-geo-node
 
 # ── Runtime stage ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -52,11 +52,11 @@ RUN apt-get update && \
     apt-get install -y ca-certificates libssl3 curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/proxima-geo-node /usr/local/bin/
+COPY --from=builder /app/target/release/geo-redis-geo-node /usr/local/bin/
 
 EXPOSE 4000
 
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
     CMD curl -f http://localhost:${HTTP_PORT:-4000}/health || exit 1
 
-CMD ["proxima-geo-node"]
+CMD ["geo-redis-geo-node"]

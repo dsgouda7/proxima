@@ -1,4 +1,4 @@
-//! proxima-grpc-bench
+//! geo-redis-grpc-bench
 //!
 //! A head-to-head **gRPC** benchmark of two geo-cache strategies, measured
 //! end-to-end over a real HTTP/2 loopback connection:
@@ -8,7 +8,7 @@
 //!     cell keys, then a pipelined `GET` of every entity. Every query pays a
 //!     network round-trip (or several) to Redis.
 //!
-//!   • trie        — entries live in proxima's in-memory `GeoTrie`. A region
+//!   • trie        — entries live in geo-redis's in-memory `GeoTrie`. A region
 //!     query computes the S2 viewport tokens and walks the prefix trie. No
 //!     Redis round-trip.
 //!
@@ -17,9 +17,9 @@
 //! attributable to the cache strategy, not the transport.
 //!
 //! Usage:
-//!   cargo run --release -p proxima-grpc-bench
-//!   cargo run --release -p proxima-grpc-bench -- --entities 100000 --queries 5000
-//!   cargo run --release -p proxima-grpc-bench -- --redis redis://127.0.0.1:6379
+//!   cargo run --release -p geo-redis-grpc-bench
+//!   cargo run --release -p geo-redis-grpc-bench -- --entities 100000 --queries 5000
+//!   cargo run --release -p geo-redis-grpc-bench -- --redis redis://127.0.0.1:6379
 
 use std::{
     sync::Arc,
@@ -39,8 +39,8 @@ use tonic::{async_trait, codegen::*, Request, Response, Status};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "proxima-grpc-bench",
-    about = "gRPC benchmark: naive Redis cache vs proxima trie-based cache"
+    name = "geo-redis-grpc-bench",
+    about = "gRPC benchmark: naive Redis cache vs geo-redis trie-based cache"
 )]
 struct Args {
     /// Redis connection URL for the naive backend.
@@ -334,7 +334,7 @@ impl BenchCache for RedisBackend {
     }
 }
 
-// ── Backend 2: proxima trie-based cache ──────────────────────────────────────
+// ── Backend 2: geo-redis trie-based cache ──────────────────────────────────────
 
 struct TrieBackend {
     trie: RwLock<GeoTrie>,
@@ -569,7 +569,7 @@ fn print_report(stats: &[Stats]) {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("proxima gRPC cache benchmark");
+    println!("geo-redis gRPC cache benchmark");
     println!(
         "  entities={}  queries={}  s2_level={}  viewport=+/-{} deg",
         args.entities, args.queries, args.s2_level, args.viewport_deg

@@ -416,7 +416,7 @@ export default function AppEarthquake() {
         fontFamily: 'system-ui, sans-serif'
       }}>
         <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>
-          proxima — Earthquake Tracker
+          geo-redis — Earthquake Tracker
         </h1>
         <div style={{ fontSize: '13px', color: '#666', marginTop: '4px' }}>
           Real-time seismic data via gRPC

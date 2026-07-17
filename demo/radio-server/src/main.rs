@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::Config::from_env();
 
-    tracing::info!("proxima-radio starting");
+    tracing::info!("geo-redis-radio starting");
     tracing::info!("API base: {}", cfg.api_base);
     tracing::info!("Fetch limit: {}", cfg.fetch_limit);
     tracing::info!("Poll interval: {}s", cfg.poll_interval_secs);

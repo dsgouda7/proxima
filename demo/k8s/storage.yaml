@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: geo-node-0-data
-  namespace: geo-redis
+  namespace: geo-redisis
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -12,7 +12,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: geo-node-1-data
-  namespace: geo-redis
+  namespace: geo-redisis
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -22,7 +22,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: geo-node-2-data
-  namespace: geo-redis
+  namespace: geo-redisis
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -32,7 +32,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: geo-node-3-data
-  namespace: geo-redis
+  namespace: geo-redisis
 spec:
   accessModes: [ReadWriteOnce]
   resources:

@@ -119,7 +119,7 @@ export default function AppRadio() {
   }, []);
 
   // Set tab title once on mount.
-  useEffect(() => { document.title = 'proxima — Radio Explorer'; }, []);
+  useEffect(() => { document.title = 'geo-redis — Radio Explorer'; }, []);
 
   // Metrics poller.
   useEffect(() => {
@@ -139,7 +139,7 @@ export default function AppRadio() {
         boxShadow: '0 2px 12px rgba(0,0,0,0.5)',
       }}>
         <span style={{ fontSize: 20 }}>📻</span>
-        <strong style={{ fontSize: '1rem', color: '#818cf8', letterSpacing: 0.5 }}>proxima</strong>
+        <strong style={{ fontSize: '1rem', color: '#818cf8', letterSpacing: 0.5 }}>geo-redis</strong>
         <span style={{ color: '#475569', fontSize: 12 }}>·</span>
         <span style={{ color: '#94a3b8', fontSize: 12 }}>Live Radio Explorer</span>
         <span style={{

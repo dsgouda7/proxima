@@ -50,7 +50,7 @@ jobs:
           context: .
           file: demo/geo-node/Dockerfile
           push: false
-          tags: proxima-geo-node:ci
+          tags: geo-redis-geo-node:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -62,4 +62,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo run -p proxima-cluster-test
+      - run: cargo run -p geo-redis-cluster-test

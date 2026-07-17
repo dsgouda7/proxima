@@ -283,7 +283,7 @@ impl<T: GeoRedisGrpc> Clone for GeoRedisServer<T> {
 }
 
 impl<T: GeoRedisGrpc> tonic::server::NamedService for GeoRedisServer<T> {
-    const NAME: &'static str = "proxima.v1.GeoRedis";
+    const NAME: &'static str = "geo-redis.v1.GeoRedis";
 }
 
 impl<T, B> Service<http::Request<B>> for GeoRedisServer<T>

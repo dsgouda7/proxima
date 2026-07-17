@@ -1,5 +1,5 @@
 [package]
-name    = "proxima-weather"
+name    = "geo-redis-weather"
 version = "0.1.0"
 edition = "2021"
 

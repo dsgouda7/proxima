@@ -49,24 +49,24 @@ done
 # ── Build Rust binaries ───────────────────────────────────────────────────
 if [[ $SKIP_BUILD -eq 0 ]]; then
   info "Building backends (first build ~60s)..."
-  cargo build --release -p proxima-demo -p proxima-weather
+  cargo build --release -p geo-redis-demo -p geo-redis-weather
 fi
 
 mkdir -p target
 
 # ── Servers ───────────────────────────────────────────────────────────────
 info "Starting OpenSky server    → :3000"
-SERVER_PORT=3000 SQLITE_PATH=proxima.db \
+SERVER_PORT=3000 SQLITE_PATH=geo-redis.db \
   REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}" \
-  ./target/release/proxima-demo \
+  ./target/release/geo-redis-demo \
   >target/demo-stdout.log 2>target/demo-stderr.log &
 P_DEMO=$!
 
 info "Starting Weather server    → :3001"
-SERVER_PORT=3001 SQLITE_PATH=proxima-weather.db \
+SERVER_PORT=3001 SQLITE_PATH=geo-redis-weather.db \
   REDIS_URL=redis://127.0.0.1:6379/1 \
   WEATHER_POLL_SECS=60 \
-  ./target/release/proxima-weather \
+  ./target/release/geo-redis-weather \
   >target/weather-stdout.log 2>target/weather-stderr.log &
 P_WEATHER=$!
 

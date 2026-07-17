@@ -44,7 +44,7 @@ interface Props {
  * length + 1 steps) to fit in a single wrapped row.
  *
  * Polls GET /api/trie only while `highlightId` is set. The trie's internal
- * shape is fully derivable from S2 token strings alone, so no proxima
+ * shape is fully derivable from S2 token strings alone, so no geo-redis
  * (lib/) changes were needed.
  */
 export default function TrieExplorer({ highlightId }: Props) {

@@ -155,7 +155,7 @@ function New-RandomEntity {
 
 function Start-LoadJob { param($wps, $shardSpecs)
     # Launch the loadtest binary as a background job
-    $exe    = ".\target\release\proxima-loadtest.exe"
+    $exe    = ".\target\release\geo-redis-loadtest.exe"
     $args   = "--writers 4 --readers 8 --batch-size $([Math]::Max(1,$wps/4)) --duration-secs 999"
     if ($shardSpecs) { $args += " --shards `"$shardSpecs`"" }
     $script:loadJob = Start-Job -ScriptBlock {
@@ -245,7 +245,7 @@ Log-Event "Building release binaries (geo-node + loadtest)..."
 
 if (-not $SkipBuild) {
     $env:PATH += ";$env:USERPROFILE\.cargo\bin"
-    $buildResult = cargo build --release -p proxima-geo-node -p proxima-loadtest 2>&1
+    $buildResult = cargo build --release -p geo-redis-geo-node -p geo-redis-loadtest 2>&1
     if ($LASTEXITCODE -ne 0) {
         $script:testPassed = $false
         Log-Event "Build failed — check output" "Red"
@@ -317,7 +317,7 @@ Log-Event "Phase: high-load — loadtest binary, ~$SplitThreshold entity target 
 Draw-Dashboard
 
 # Launch the compiled loadtest binary (handles throughput much better than PS)
-$loadExe = ".\target\release\proxima-loadtest.exe"
+$loadExe = ".\target\release\geo-redis-loadtest.exe"
 if (Test-Path $loadExe) {
     $loadArgs = @("--writers", "4", "--readers", "8",
                   "--batch-size", "500",

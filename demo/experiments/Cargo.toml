@@ -1,5 +1,5 @@
 [package]
-name        = "proxima-experiments"
+name        = "geo-redis-experiments"
 version     = "0.1.0"
 edition     = "2021"
 description = "Controlled experiments: latency histograms, W×Δt bound, ZSET drift, memory per entity"
@@ -9,7 +9,7 @@ name = "experiments"
 path = "src/main.rs"
 
 [dependencies]
-proxima          = { package = "geo-redis", path = "../../lib" }
+proxima            = { package = "geo-redis", path = "../../lib" }
 tokio            = { workspace = true }
 redis            = { version = "0.26", features = ["tokio-comp"] }
 serde_json       = { workspace = true }

@@ -1,5 +1,5 @@
 [package]
-name    = "proxima-cluster-test"
+name    = "geo-redis-cluster-test"
 version = "0.1.0"
 edition = "2021"
 description = "Integration tests: high-load ingestion, shard split seeding, delta-sync consistency"
@@ -9,7 +9,7 @@ name = "cluster-test"
 path = "src/main.rs"
 
 [dependencies]
-proxima             = { package = "geo-redis", path = "../../lib" }
+proxima            = { package = "geo-redis", path = "../../lib" }
 tokio               = { version = "1", features = ["full"] }
 serde_json          = "1"
 anyhow              = "1"
