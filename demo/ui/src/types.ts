@@ -99,6 +99,10 @@ export interface MetricsSnapshot {
   read_count:   number;
   read_avg_us:  number;
   read_max_us:  number;
+  /** Present when query_nearby has been called at least once. */
+  nearby_count?:   number;
+  nearby_avg_us?:  number;
+  nearby_max_us?:  number;
 }
 
 export interface MetricsResponse {

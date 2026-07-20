@@ -5,7 +5,7 @@ use axum::{
 };
 use proxima::{GeoEntry, NearbyEntry};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 // ── Response types ─────────────────────────────────────────────────────────
 
@@ -119,19 +119,29 @@ pub async fn get_metrics(State(st): State<Arc<AppState>>) -> Json<serde_json::Va
         .map(|v| v.len())
         .unwrap_or(0);
     let last_sync = *st.last_refresh.read().await;
+
+    use std::sync::atomic::Ordering::Relaxed;
+    let nearby_count    = st.nearby_count.load(Relaxed);
+    let nearby_total_us = st.nearby_total_us.load(Relaxed);
+    let nearby_max_us   = st.nearby_max_us.load(Relaxed);
+    let nearby_avg_us   = if nearby_count > 0 { nearby_total_us / nearby_count } else { 0 };
+
     Json(serde_json::json!({
         "source":          "Radio Browser (radiobrowser.info)",
         "total_stations":  total,
         "leaf_cells":      leaf_count,
-        "trie_size":       total,   // total stations — drives the panel count display
+        "trie_size":       total,
         "last_sync":       last_sync,
         "metrics": {
-            "write_count":  0,
-            "write_avg_us": 0,
-            "write_max_us": 0,
-            "read_count":   0,
-            "read_avg_us":  0,
-            "read_max_us":  0,
+            "write_count":    0u64,
+            "write_avg_us":   0u64,
+            "write_max_us":   0u64,
+            "read_count":     0u64,
+            "read_avg_us":    0u64,
+            "read_max_us":    0u64,
+            "nearby_count":   nearby_count,
+            "nearby_avg_us":  nearby_avg_us,
+            "nearby_max_us":  nearby_max_us,
         },
     }))
 }
@@ -158,11 +168,13 @@ fn default_limit()    -> usize { 20 }
 
 #[derive(Serialize)]
 pub struct NearbyResponse {
-    count:     usize,
-    query_lat: f64,
-    query_lon: f64,
-    radius_m:  f64,
-    results:   Vec<NearbyEntry>,
+    count:             usize,
+    query_lat:         f64,
+    query_lon:         f64,
+    radius_m:          f64,
+    /// Wall-clock duration of this query in milliseconds (cap covering + trie walk + haversine filter + sort).
+    query_duration_ms: f64,
+    results:           Vec<NearbyEntry>,
 }
 
 /// GET /api/nearby?lat=&lon=&radius_m=&limit=
@@ -174,13 +186,30 @@ pub async fn nearby_stations(
     State(st): State<Arc<AppState>>,
     Query(p): Query<NearbyParams>,
 ) -> Json<NearbyResponse> {
+    let start = Instant::now();
     let trie = st.nearby_trie.read().await;
     let results = trie.query_nearby(p.lat, p.lon, p.radius_m, Some(p.limit));
+    let elapsed_us = start.elapsed().as_micros() as u64;
+
+    // Update atomic metrics (relaxed ordering — counters, not synchronisation).
+    use std::sync::atomic::Ordering::Relaxed;
+    st.nearby_count.fetch_add(1, Relaxed);
+    st.nearby_total_us.fetch_add(elapsed_us, Relaxed);
+    // Update max via compare-exchange loop.
+    let mut prev = st.nearby_max_us.load(Relaxed);
+    while elapsed_us > prev {
+        match st.nearby_max_us.compare_exchange_weak(prev, elapsed_us, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(current) => prev = current,
+        }
+    }
+
     Json(NearbyResponse {
-        count:     results.len(),
-        query_lat: p.lat,
-        query_lon: p.lon,
-        radius_m:  p.radius_m,
+        count:            results.len(),
+        query_lat:        p.lat,
+        query_lon:        p.lon,
+        radius_m:         p.radius_m,
+        query_duration_ms: elapsed_us as f64 / 1_000.0,
         results,
     })
 }

@@ -254,6 +254,11 @@ The `Metrics` struct (per `RedisStore` instance) now uses **HDR histograms** bac
 | `read_count` | counter | Total `query_region` calls |
 | `read_p50/p95/p99/p99.9_us` | histogram | Read latency percentiles (µs) |
 | `read_max_us` | gauge | Max read latency observed |
+| `nearby_count` | counter | Total `query_nearby` calls |
+| `nearby_p50/p95/p99/p99.9_us` | histogram | Nearby pipeline latency (µs): S2 cap covering + Redis SUNION/GET + haversine filter + sort |
+| `nearby_max_us` | gauge | Peak nearby query latency observed |
+
+**Interpreting nearby vs read latency:** `query_nearby` runs the same Redis pipeline as `query_region` (SUNION + pipelined GET) and then adds an O(candidates) haversine filter and sort. At typical viewport densities (10–200 candidates) the post-processing is sub-millisecond in-process, so `nearby_p50` should stay within ~1–2 ms of `read_p50`. Divergence beyond that indicates a very large candidate set — reduce `radius_m` or lower the S2 level.
 
 The geo-node exposes these plus Redis `DBSIZE` and `INFO memory` at `GET /metrics/prom` in Prometheus text format under the `geo-redis_*` namespace.
 
@@ -289,6 +294,12 @@ sum(rate(geo-redis_write_count[1m]))
 
 # p99 read latency worst shard
 max(geo-redis_query_latency_us{quantile="0.99"})
+
+# p99 nearby latency (should track close to read latency)
+max(geo-redis_nearby_latency_us{quantile="0.99"})
+
+# Nearby overhead vs plain read (excess = haversine filter + sort cost)
+max(geo-redis_nearby_latency_us{quantile="0.99"}) - max(geo-redis_query_latency_us{quantile="0.99"})
 
 # Total entities in cluster
 sum(geo-redis_key_count)

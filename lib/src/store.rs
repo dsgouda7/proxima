@@ -329,6 +329,7 @@ impl RedisStore {
         s2_level: u8,
         top_k: Option<usize>,
     ) -> Result<Vec<NearbyEntry>> {
+        let start = Instant::now();
         let tokens = s2_cap_covering(lat, lon, radius_m, s2_level);
         let candidates = self.query_region(&tokens).await?;
         let mut results: Vec<NearbyEntry> = candidates
@@ -346,6 +347,7 @@ impl RedisStore {
         if let Some(k) = top_k {
             results.truncate(k);
         }
+        self.metrics.record_nearby(start.elapsed().as_micros() as u64);
         Ok(results)
     }
 

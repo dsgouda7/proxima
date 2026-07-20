@@ -5,7 +5,13 @@ mod routes;
 
 use axum::{routing::get, Router};
 use proxima::{GeoEntry, GeoTrie};
-use std::{collections::HashMap, sync::{atomic::AtomicUsize, Arc}};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize},
+        Arc,
+    },
+};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
@@ -19,6 +25,13 @@ pub struct AppState {
     pub total_stations: AtomicUsize,
     /// Unix timestamp (seconds) of the most recent Radio Browser refresh.
     pub last_refresh: RwLock<Option<u64>>,
+    // ── Nearby query metrics (atomic — no lock needed) ──────────────────
+    /// Total number of /api/nearby calls served.
+    pub nearby_count: AtomicU64,
+    /// Cumulative query duration in microseconds (used to compute average).
+    pub nearby_total_us: AtomicU64,
+    /// Peak single-query duration in microseconds.
+    pub nearby_max_us: AtomicU64,
 }
 
 #[tokio::main]
@@ -36,10 +49,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Poll interval: {}s", cfg.poll_interval_secs);
 
     let state = Arc::new(AppState {
-        clusters:       RwLock::new(HashMap::new()),
-        nearby_trie:    RwLock::new(GeoTrie::new(9)),
-        total_stations: AtomicUsize::new(0),
-        last_refresh:   RwLock::new(None),
+        clusters:        RwLock::new(HashMap::new()),
+        nearby_trie:     RwLock::new(GeoTrie::new(9)),
+        total_stations:  AtomicUsize::new(0),
+        last_refresh:    RwLock::new(None),
+        nearby_count:    AtomicU64::new(0),
+        nearby_total_us: AtomicU64::new(0),
+        nearby_max_us:   AtomicU64::new(0),
     });
 
     // Initial load — block until we have data before accepting requests.
