@@ -262,13 +262,17 @@ The `Metrics` struct (per `RedisStore` instance) now uses **HDR histograms** bac
 
 **Measured (radio demo, 12,648 in-memory stations, Windows loopback, 2026-07-20):**
 
-| Operation | avg server-side | Notes |
-|---|---|---|
-| `query_nearby` 200 km radius | **1.45 ms** | S2 cap covering + level-9 trie walk + haversine + sort |
-| `query_region` zoom=7 (level-4 clusters) | **0.18 ms** | Pre-aggregated tier lookup + bbox filter only |
-| `query_region` zoom=9 (leaf + station lists) | **12 ms** | Dominated by cloning 855 `Vec<StationInfo>` payloads |
+| Operation | p50 | p95 | max | Notes |
+|---|---|---|---|---|
+| `query_nearby` — S2 spatial index | **1.34 ms** | 2.36 ms | 2.50 ms | S2 cap covering → walk only matching cells → haversine ~20 candidates → sort |
+| `query_nearby-naive` — full scan | **43.8 ms** | 56.6 ms | 61.2 ms | Walk all 12,648 entries → haversine every one → sort |
+| `query_region` zoom=7 (level-4 tiers) | 0.18 ms | — | — | Pre-aggregated tier lookup + bbox filter (no individual station processing) |
 
-The ~1.27 ms gap between nearby and a plain tier query is attributable to S2 cap covering computation and traversing the fine-grained level-9 trie, **not** to haversine arithmetic. The cap covering is the more expensive step; haversine over 17 candidates is < 5 µs.
+**Speedup vs naive: 33× at p50, 24× at p95** (30 queries, 6 cities, radii 150–400 km).
+
+The naive approach scales as O(N) — every additional entity in the store costs another haversine call regardless of whether it is geographically relevant. The S2 index scales as O(covering_size): for a 200 km radius at S2 level 9, the cap covering produces ~50–80 tokens, retrieving only the ~20 entities that actually fall inside the radius. The ~1.16 ms cost not attributable to haversine is S2 cap covering computation + trie traversal of the relevant cells only.
+
+At 1 million entities, the naive approach would take ~3.5 s (linear extrapolation); the S2 index stays sub-5 ms because the covering size does not grow with N — it grows only with the physical area of the query radius.
 
 The geo-node exposes these plus Redis `DBSIZE` and `INFO memory` at `GET /metrics/prom` in Prometheus text format under the `geo-redis_*` namespace.
 

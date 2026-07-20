@@ -86,11 +86,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let app = Router::new()
-        .route("/api/aircraft",   get(routes::all_clusters))
-        .route("/api/region",     get(routes::region_clusters))
-        .route("/api/nearby",     get(routes::nearby_stations))
-        .route("/api/metrics",    get(routes::get_metrics))
-        .route("/health",         get(routes::health))
+        .route("/api/aircraft",      get(routes::all_clusters))
+        .route("/api/region",        get(routes::region_clusters))
+        .route("/api/nearby",        get(routes::nearby_stations))
+        .route("/api/nearby-naive",  get(routes::nearby_naive))
+        .route("/api/metrics",       get(routes::get_metrics))
+        .route("/health",            get(routes::health))
         .layer(CorsLayer::permissive())
         .with_state(Arc::clone(&state));
 

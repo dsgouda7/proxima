@@ -222,3 +222,62 @@ pub async fn nearby_stations(
         results,
     })
 }
+
+// ── Naive baseline ─────────────────────────────────────────────────────────
+
+/// GET /api/nearby-naive?lat=&lon=&radius_m=&limit=
+///
+/// Baseline: full linear scan over every station in the index, compute
+/// haversine for each one, filter, sort.
+///
+/// This models the naive Redis strategy:
+///   SCAN all entity keys → pipeline GET every entity → deserialize N payloads
+///   → haversine-filter all N → sort → truncate.
+///
+/// Compare `query_duration_ms` here against `/api/nearby` to quantify the
+/// S2 spatial-index speedup.
+pub async fn nearby_naive(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<NearbyParams>,
+) -> Json<NearbyResponse> {
+    let trie = st.nearby_trie.read().await;
+    let start = Instant::now();
+
+    // all_entries() walks the entire trie — equivalent to fetching every
+    // entity from a flat Redis hash or a SCAN + GET-all pipeline.
+    let mut results: Vec<NearbyEntry> = trie
+        .all_entries()
+        .into_iter()
+        .filter_map(|e| {
+            let dist = haversine_m(p.lat, p.lon, e.lat, e.lon);
+            if dist <= p.radius_m {
+                Some(NearbyEntry { distance_m: dist, entry: e })
+            } else {
+                None
+            }
+        })
+        .collect();
+    results.sort_by(|a, b| a.distance_m.partial_cmp(&b.distance_m).unwrap());
+    results.truncate(p.limit);
+
+    let elapsed_us = start.elapsed().as_micros() as u64;
+
+    Json(NearbyResponse {
+        count:             results.len(),
+        query_lat:         p.lat,
+        query_lon:         p.lon,
+        radius_m:          p.radius_m,
+        query_duration_ms: elapsed_us as f64 / 1_000.0,
+        results,
+    })
+}
+
+/// Haversine great-circle distance in metres (inline — avoids a pub(crate) dep).
+fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * R * a.sqrt().asin()
+}
