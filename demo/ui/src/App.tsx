@@ -6,6 +6,7 @@ import { Aircraft, MetricsResponse } from './types';
 import AircraftMarker from './components/AircraftMarker';
 import AircraftPanel from './components/AircraftPanel';
 import MetricsPanel from './components/MetricsPanel';
+import NearbySearch from './components/NearbySearch';
 import TrieExplorer from './components/TrieExplorer';
 import 'leaflet/dist/leaflet.css';
 const REGION_ZOOM = 6;   // switch to Redis region query above this zoom
@@ -199,6 +200,7 @@ export default function App() {
             />
           ))}
         </MapContainer>
+        <NearbySearch mapRef={mapRef} onSelect={id => setSelected(id)} />
         <AircraftPanel aircraft={aircraft} onSelect={handleSelect} selected={selected} isWeather={isWeather} />
         {metrics && <MetricsPanel metrics={metrics} entityLabel={isWeather ? 'Stations' : 'Aircraft'} />}
         <div style={{ position: 'absolute', bottom: 24, left: 10, zIndex: 1000, display: 'flex', alignItems: 'flex-end', gap: 10 }}>

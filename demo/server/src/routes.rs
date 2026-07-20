@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use proxima::GeoEntry;
+use proxima::{GeoEntry, NearbyEntry};
 use s2::{cap::Cap, latlng::LatLng, point::Point, region::RegionCoverer, s1};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -64,6 +64,63 @@ pub async fn get_metrics(State(st): State<Arc<AppState>>) -> Json<serde_json::Va
 
 pub async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+// ── Nearby query ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct NearbyParams {
+    lat: f64,
+    lon: f64,
+    /// Search radius in metres (default 500 km).
+    #[serde(default = "default_radius_m")]
+    radius_m: f64,
+    /// Maximum results to return (default 20).
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_radius_m() -> f64 { 500_000.0 }
+fn default_limit()    -> usize { 20 }
+
+#[derive(Serialize)]
+pub struct NearbyResponse {
+    count: usize,
+    query_lat: f64,
+    query_lon: f64,
+    radius_m: f64,
+    results: Vec<NearbyEntry>,
+}
+
+/// GET /api/nearby?lat=&lon=&radius_m=&limit=
+///
+/// Returns up to `limit` aircraft nearest to `(lat, lon)` within `radius_m`
+/// metres, sorted closest-first with the great-circle distance included in
+/// each result. Uses the Redis-backed S2 trie — no full dataset scan.
+pub async fn nearby_aircraft(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<NearbyParams>,
+) -> Json<NearbyResponse> {
+    let top_k = Some(p.limit);
+    match st.store.query_nearby(p.lat, p.lon, p.radius_m, st.config.s2_level, top_k).await {
+        Ok(results) => Json(NearbyResponse {
+            count: results.len(),
+            query_lat: p.lat,
+            query_lon: p.lon,
+            radius_m: p.radius_m,
+            results,
+        }),
+        Err(e) => {
+            tracing::error!("nearby query: {e}");
+            Json(NearbyResponse {
+                count: 0,
+                query_lat: p.lat,
+                query_lon: p.lon,
+                radius_m: p.radius_m,
+                results: vec![],
+            })
+        }
+    }
 }
 
 #[derive(Serialize)]

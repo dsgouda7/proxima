@@ -37,4 +37,4 @@ pub mod trie;
 pub use error::{Error, Result};
 pub use metrics::{Metrics, MetricsSnapshot};
 pub use store::{GeoStore, RedisStore, DEFAULT_ENTITY_TTL_SECS};
-pub use trie::{GeoEntry, GeoTrie};
+pub use trie::{GeoEntry, GeoTrie, NearbyEntry};

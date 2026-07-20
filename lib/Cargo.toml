@@ -1,6 +1,6 @@
 [package]
 name        = "geo-redis"
-version     = "0.1.1"
+version     = "0.1.2"
 edition     = "2021"
 description = "S2-geometry-keyed distributed geospatial trie with Redis persistence — sub-10ms near-me queries over millions of moving objects"
 repository  = "https://github.com/dsgouda7/geo-redis"

@@ -77,6 +77,21 @@ export interface TrieSnapshot {
 
 export interface AircraftResponse { count: number; aircraft: Aircraft[]; }
 
+/** One result from the /api/nearby endpoint. */
+export interface NearbyResult {
+  distance_m: number;
+  entry: Aircraft;
+}
+
+/** Response shape from GET /api/nearby */
+export interface NearbyResponse {
+  count:     number;
+  query_lat: number;
+  query_lon: number;
+  radius_m:  number;
+  results:   NearbyResult[];
+}
+
 export interface MetricsSnapshot {
   write_count:  number;
   write_avg_us: number;

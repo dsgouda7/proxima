@@ -1,4 +1,4 @@
-use s2::{cellid::CellID, latlng::LatLng, s1};
+use s2::{cap::Cap, cellid::CellID, latlng::LatLng, point::Point, region::RegionCoverer, s1};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -38,6 +38,14 @@ impl GeoEntry {
             written_at: 0,
         }
     }
+}
+
+/// A query result from [`GeoTrie::query_nearby`] or [`RedisStore::query_nearby`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NearbyEntry {
+    /// Great-circle distance from the query point to this entity, in metres.
+    pub distance_m: f64,
+    pub entry: GeoEntry,
 }
 
 #[derive(Default)]
@@ -159,6 +167,39 @@ impl GeoTrie {
     /// Useful for observing memory savings after bulk pruning.
     pub fn count_nodes(&self) -> usize {
         count_nodes(&self.root)
+    }
+
+    /// Returns all entities within `radius_m` metres of `(lat, lon)`, sorted
+    /// nearest-first, optionally capped at `top_k` results.
+    ///
+    /// Uses an S2 cap covering to identify candidate cells (fast, no full scan),
+    /// then applies an exact haversine post-filter at the cell boundary so only
+    /// entities strictly inside the requested radius are returned.
+    pub fn query_nearby(
+        &self,
+        lat: f64,
+        lon: f64,
+        radius_m: f64,
+        top_k: Option<usize>,
+    ) -> Vec<NearbyEntry> {
+        let tokens = s2_cap_covering(lat, lon, radius_m, self.s2_level);
+        let mut results: Vec<NearbyEntry> = self
+            .query_tokens(&tokens)
+            .into_iter()
+            .filter_map(|e| {
+                let dist = haversine_m(lat, lon, e.lat, e.lon);
+                if dist <= radius_m {
+                    Some(NearbyEntry { distance_m: dist, entry: e })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        results.sort_by(|a, b| a.distance_m.partial_cmp(&b.distance_m).unwrap());
+        if let Some(k) = top_k {
+            results.truncate(k);
+        }
+        results
     }
 }
 
@@ -290,4 +331,42 @@ fn count_nodes(node: &TrieNode) -> usize {
         .values()
         .map(|c| count_nodes(c))
         .sum::<usize>()
+}
+
+// ── Geospatial helpers ─────────────────────────────────────────────────────
+
+/// Great-circle distance between two points using the Haversine formula.
+/// Returns metres.
+pub(crate) fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * R * a.sqrt().asin()
+}
+
+/// S2 cell tokens (at `level`) whose union covers a spherical cap centred on
+/// `(lat, lon)` with radius `radius_m` metres.
+pub(crate) fn s2_cap_covering(lat: f64, lon: f64, radius_m: f64, level: u8) -> Vec<String> {
+    use std::f64::consts::PI;
+    let center = Point::from(LatLng::new(s1::Deg(lat).into(), s1::Deg(lon).into()));
+    let radius_rad = (radius_m / 6_371_000.0_f64).min(PI);
+    let angle: s1::angle::Angle = s1::Rad(radius_rad).into();
+    let cap = Cap::from_center_angle(&center, &angle);
+    let coverer = RegionCoverer {
+        min_level: level,
+        max_level: level,
+        level_mod: 1,
+        max_cells: 500,
+    };
+    coverer
+        .covering(&cap)
+        .0
+        .iter()
+        .map(|c| {
+            let hex = format!("{:016x}", c.0);
+            hex.trim_end_matches('0').to_string()
+        })
+        .collect()
 }

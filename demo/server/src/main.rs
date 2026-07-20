@@ -128,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/aircraft", get(routes::all_aircraft))
         .route("/api/aircraft/:id", get(routes::aircraft_detail))
         .route("/api/region", get(routes::region_aircraft))
+        .route("/api/nearby", get(routes::nearby_aircraft))
         .route("/api/metrics", get(routes::get_metrics))
         .route("/api/trie", get(routes::trie_snapshot))
         .route("/api/health", get(routes::health))

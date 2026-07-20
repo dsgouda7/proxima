@@ -1,4 +1,4 @@
-export type { Aircraft, AircraftResponse, MetricsSnapshot, MetricsResponse, TrieSnapshot } from '../types';
+export type { Aircraft, AircraftResponse, MetricsSnapshot, MetricsResponse, TrieSnapshot, NearbyResponse, NearbyResult } from '../types';
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
@@ -20,6 +20,28 @@ export const fetchTrieSnapshot = () =>
 export function fetchRegion(s: number, w: number, n: number, e: number, zoom?: number) {
   const base = `/api/region?s=${s}&w=${w}&n=${n}&e=${e}`;
   return get<import('../types').AircraftResponse>(zoom != null ? `${base}&zoom=${zoom}` : base);
+}
+
+/** Geocode a place name using the Nominatim OpenStreetMap API.
+ *  Returns [lat, lon] or null if no result found. */
+export async function geocodePlace(query: string): Promise<[number, number] | null> {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+  try {
+    const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    if (!res.ok) return null;
+    const data = await res.json() as { lat: string; lon: string }[];
+    if (!data.length) return null;
+    return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+  } catch {
+    return null;
+  }
+}
+
+/** Find the nearest aircraft (or other entities) within `radius_m` metres of `(lat, lon)`. */
+export function fetchNearby(lat: number, lon: number, radius_m = 500_000, limit = 20) {
+  return get<import('../types').NearbyResponse>(
+    `/api/nearby?lat=${lat}&lon=${lon}&radius_m=${radius_m}&limit=${limit}`
+  );
 }
 
 export interface AircraftDetail {

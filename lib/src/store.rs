@@ -1,4 +1,5 @@
 use crate::{GeoEntry, GeoTrie, Metrics, Result};
+use crate::trie::{haversine_m, s2_cap_covering, NearbyEntry};
 use redis::AsyncCommands;
 use s2::{cellid::CellID, latlng::LatLng, s1};
 use std::{collections::HashSet, sync::Arc, time::Instant};
@@ -312,6 +313,40 @@ impl RedisStore {
             );
             Ok(entries)
         })
+    }
+
+    /// Returns entities within `radius_m` metres of `(lat, lon)` from Redis,
+    /// sorted nearest-first, optionally capped at `top_k` results.
+    ///
+    /// Computes an S2 cap covering for the search area, fetches candidate
+    /// entities from Redis via `query_region`, then applies an exact haversine
+    /// post-filter so only entities strictly inside the radius are returned.
+    pub async fn query_nearby(
+        &self,
+        lat: f64,
+        lon: f64,
+        radius_m: f64,
+        s2_level: u8,
+        top_k: Option<usize>,
+    ) -> Result<Vec<NearbyEntry>> {
+        let tokens = s2_cap_covering(lat, lon, radius_m, s2_level);
+        let candidates = self.query_region(&tokens).await?;
+        let mut results: Vec<NearbyEntry> = candidates
+            .into_iter()
+            .filter_map(|e| {
+                let dist = haversine_m(lat, lon, e.lat, e.lon);
+                if dist <= radius_m {
+                    Some(NearbyEntry { distance_m: dist, entry: e })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        results.sort_by(|a, b| a.distance_m.partial_cmp(&b.distance_m).unwrap());
+        if let Some(k) = top_k {
+            results.truncate(k);
+        }
+        Ok(results)
     }
 
     /// Returns the number of stale entries removed.
