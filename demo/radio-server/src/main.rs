@@ -4,6 +4,7 @@ mod radio_api;
 mod routes;
 
 use axum::{routing::get, Router};
+use proxima::{GeoEntry, GeoTrie};
 use std::{collections::HashMap, sync::{atomic::AtomicUsize, Arc}};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -12,6 +13,8 @@ pub struct AppState {
     /// Pre-computed cluster tiers keyed by S2 level (2, 3, 4, 5).
     /// Level 5 entries also carry the full station list for the flyout.
     pub clusters: RwLock<HashMap<u8, Vec<aggregate::RadioCluster>>>,
+    /// Fine-grained level-9 trie of individual stations — used for /api/nearby.
+    pub nearby_trie: RwLock<GeoTrie>,
     /// Total geo-tagged stations downloaded (for the metrics panel).
     pub total_stations: AtomicUsize,
     /// Unix timestamp (seconds) of the most recent Radio Browser refresh.
@@ -34,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         clusters:       RwLock::new(HashMap::new()),
+        nearby_trie:    RwLock::new(GeoTrie::new(9)),
         total_stations: AtomicUsize::new(0),
         last_refresh:   RwLock::new(None),
     });
@@ -68,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/aircraft",   get(routes::all_clusters))
         .route("/api/region",     get(routes::region_clusters))
+        .route("/api/nearby",     get(routes::nearby_stations))
         .route("/api/metrics",    get(routes::get_metrics))
         .route("/health",         get(routes::health))
         .layer(CorsLayer::permissive())
@@ -106,6 +111,32 @@ async fn rebuild_clusters(
     map.insert(aggregate::LEAF_LEVEL, leaf);
 
     *state.clusters.write().await = map;
+
+    // Build a fine-grained trie for /api/nearby — one GeoEntry per station.
+    let mut trie = GeoTrie::new(9);
+    for s in stations {
+        let (lat, lon) = match (s.geo_lat, s.geo_long) {
+            (Some(la), Some(lo)) => (la, lo),
+            _ => continue,
+        };
+        trie.insert(GeoEntry {
+            id: s.stationuuid.clone(),
+            lat,
+            lon,
+            written_at: 0,
+            payload: serde_json::json!({
+                "__is_radio":     true,
+                "callsign":       s.name,
+                "origin_country": s.country,
+                "top_cc":         s.countrycode.to_uppercase(),
+                "top_tags":       s.tags,
+                "stream_url":     s.stream_url(),
+                "favicon":        s.favicon,
+                "votes":          s.votes,
+            }),
+        });
+    }
+    *state.nearby_trie.write().await = trie;
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

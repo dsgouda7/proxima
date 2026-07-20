@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use proxima::GeoEntry;
+use proxima::{GeoEntry, NearbyEntry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -139,4 +139,48 @@ pub async fn get_metrics(State(st): State<Arc<AppState>>) -> Json<serde_json::Va
 /// GET /health
 pub async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "source": "Radio Browser" }))
+}
+
+// ── Nearby query ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct NearbyParams {
+    lat:      f64,
+    lon:      f64,
+    #[serde(default = "default_radius_m")]
+    radius_m: f64,
+    #[serde(default = "default_limit")]
+    limit:    usize,
+}
+
+fn default_radius_m() -> f64  { 500_000.0 }
+fn default_limit()    -> usize { 20 }
+
+#[derive(Serialize)]
+pub struct NearbyResponse {
+    count:     usize,
+    query_lat: f64,
+    query_lon: f64,
+    radius_m:  f64,
+    results:   Vec<NearbyEntry>,
+}
+
+/// GET /api/nearby?lat=&lon=&radius_m=&limit=
+///
+/// Returns up to `limit` individual radio stations nearest to `(lat, lon)`
+/// within `radius_m` metres, sorted closest-first.
+/// Uses the in-memory level-9 GeoTrie — no Redis, no full scan.
+pub async fn nearby_stations(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<NearbyParams>,
+) -> Json<NearbyResponse> {
+    let trie = st.nearby_trie.read().await;
+    let results = trie.query_nearby(p.lat, p.lon, p.radius_m, Some(p.limit));
+    Json(NearbyResponse {
+        count:     results.len(),
+        query_lat: p.lat,
+        query_lon: p.lon,
+        radius_m:  p.radius_m,
+        results,
+    })
 }

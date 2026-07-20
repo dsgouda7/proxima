@@ -5,6 +5,8 @@ import type { NearbyResult } from '../types';
 
 interface Props {
   mapRef: React.RefObject<LeafletMap | null>;
+  /** Label shown in the results header, e.g. "aircraft" or "stations". Default: "results" */
+  entityLabel?: string;
   /** Called when the user clicks a result row so the parent can highlight it. */
   onSelect?: (id: string, lat: number, lon: number) => void;
 }
@@ -13,7 +15,7 @@ function fmtDist(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(0)} km` : `${m.toFixed(0)} m`;
 }
 
-export default function NearbySearch({ mapRef, onSelect }: Props) {
+export default function NearbySearch({ mapRef, entityLabel = 'results', onSelect }: Props) {
   const [query,   setQuery]   = useState('');
   const [results, setResults] = useState<NearbyResult[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -74,7 +76,7 @@ export default function NearbySearch({ mapRef, onSelect }: Props) {
       {results && results.length > 0 && (
         <div style={styles.list}>
           <div style={styles.listHeader}>
-            {results.length} nearest aircraft
+            {results.length} nearest {entityLabel}
           </div>
           {results.map(r => {
             const callsign = r.entry.payload?.callsign ?? r.entry.id;

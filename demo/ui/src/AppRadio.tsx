@@ -6,6 +6,7 @@ import { Aircraft, MetricsResponse, RadioStationInfo } from './types';
 import RadioMarker from './components/RadioMarker';
 import RadioFlyout from './components/RadioFlyout';
 import MetricsPanel from './components/MetricsPanel';
+import NearbySearch from './components/NearbySearch';
 import 'leaflet/dist/leaflet.css';
 
 const REGION_ZOOM = 4;   // switch to viewport-filtered query above this zoom
@@ -208,6 +209,8 @@ export default function AppRadio() {
             playError={playError}
           />
         )}
+
+        <NearbySearch mapRef={mapRef} entityLabel="stations" />
 
         {metrics && (
           <MetricsPanel
