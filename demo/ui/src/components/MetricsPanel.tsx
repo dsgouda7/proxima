@@ -49,13 +49,13 @@ export default function MetricsPanel({ metrics: { metrics: m, trie_size, last_sy
 
           <div style={{ color: '#6ee7b7', marginTop: 4 }}>Reads ({m.read_count.toLocaleString()})</div>
           <div>avg {ms(m.read_avg_us)} · max {ms(m.read_max_us)}</div>
+        </>
+      )}
 
-          {(m.nearby_count ?? 0) > 0 && (
-            <>
-              <div style={{ color: '#f9a8d4', marginTop: 4 }}>Nearby ({m.nearby_count!.toLocaleString()})</div>
-              <div>avg {ms(m.nearby_avg_us ?? 0)} · max {ms(m.nearby_max_us ?? 0)}</div>
-            </>
-          )}
+      {(m.nearby_count ?? 0) > 0 && (
+        <>
+          <div style={{ color: '#f9a8d4', marginTop: 4 }}>Nearby ({m.nearby_count!.toLocaleString()})</div>
+          <div>avg {ms(m.nearby_avg_us ?? 0)} · max {ms(m.nearby_max_us ?? 0)}</div>
         </>
       )}
     </div>
